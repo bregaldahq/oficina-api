@@ -184,6 +184,13 @@ claims específicas vêm **primeiro** no JSON, depois `iss`, `iat`, `exp`. Mante
 | Rota | Integração | Authorizer |
 |---|---|---|
 | `POST /auth/cpf` | Lambda `auth-cpf` | nenhum |
+| `GET /api/health` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /api/ready` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `POST /api/auth/login` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `POST /api/service-orders/{id}/approval` | HTTP_PROXY via VPC Link → NLB:80 | nenhum (a aplicação exige `X-Webhook-Token`) |
+| `GET /docs` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /docs/{proxy+}` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /swagger.yaml` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
 | `ANY /api/{proxy+}` | HTTP_PROXY via VPC Link → NLB:80 | Lambda `jwt-authorizer` |
 
 O `jwt-authorizer` é do tipo **REQUEST**, `payload_format_version = "2.0"`,
@@ -192,8 +199,15 @@ O `jwt-authorizer` é do tipo **REQUEST**, `payload_format_version = "2.0"`,
 
 Retorno: `{"isAuthorized": true|false, "context": {"customerId": "...", "role": "..."}}`.
 
-`POST /api/auth/login` passa pelo `{proxy+}` mas o authorizer **libera sem token** apenas essa
-rota (checa `$request.path`), pois é onde o admin obtém o token.
+> **Adendo 7 (rotas dedicadas).** Com `identity_sources = ["$request.header.Authorization"]`,
+> o HTTP API responde 401 **sem invocar** o `jwt-authorizer` quando o header falta. Por isso,
+> liberar uma rota dentro do authorizer não basta: toda rota que a aplicação declara sem JWT
+> (`requireAuth: false`) tem rota dedicada, sem authorizer, no `apigateway.tf`. É o caso das
+> sondas, do login do admin (que antes passava pelo `{proxy+}` com isenção no authorizer) e do
+> webhook de aprovação, protegido pela aplicação com `X-Webhook-Token`. A documentação
+> (`/docs`, `/swagger.yaml`) também tem rota dedicada; o nginx da aplicação a serve. A lista
+> `PUBLIC_ROUTES` do authorizer continua como defesa extra. O `bin/check-contracts.py` do
+> repositório principal confere essa coerência (`ROTA-1` a `ROTA-4`).
 
 ### Aplicação — matriz de autorização
 
