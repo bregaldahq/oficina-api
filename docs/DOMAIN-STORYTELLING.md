@@ -91,7 +91,7 @@ sequenceDiagram
 | Orçamento (cálculo) | `ServiceOrder::calculateTotalAmount()` — atualizado a cada item adicionado |
 | Notificação por email | `ServiceOrderStatusChangedEvent` → `StatusChangeEmailNotifier` |
 | Aprovar / recusar | `ReviewBudgetUseCase` (`POST /api/service-orders/{id}/approval`) |
-| Identificação do Cliente pelo CPF | Lambda `auth-cpf` (`POST /auth/cpf`, no API Gateway) — repositório `oficina-lambda-auth` |
+| Identificação do Cliente pelo CPF | Lambda `auth-cpf` (`POST /auth/cpf`, no API Gateway) — repositório `oficina-gateway-auth` |
 | Consulta das próprias OS | `ListServiceOrdersByCustomerUseCase` (`GET /api/service-orders/me`) |
 | Histórico de transições | `StatusHistorySubscriber` → `service_order_status_history` |
 | Telemetria de negócio | `NewRelicSubscriber` → eventos `ServiceOrderCreated` e `ServiceOrderStatusChanged` |

@@ -12,10 +12,10 @@ técnicas:
 
 | Repositório | Muda quando | Frequência |
 |---|---|---|
-| `oficina-infra-database` | rede, banco ou segredos mudam | raríssimo |
-| `oficina-infra-k8s` | versão do cluster, add-ons, node group | ocasional |
-| `oficina-lambda-auth` | regra de autenticação, rotas do gateway | ocasional |
-| `oficina-mecanica-tech-challenge` | qualquer mudança de produto | diário |
+| `oficina-infra-fundacao` | rede, banco ou segredos mudam | raríssimo |
+| `oficina-infra-cluster` | versão do cluster, add-ons, node group | ocasional |
+| `oficina-gateway-auth` | regra de autenticação, rotas do gateway | ocasional |
+| `oficina-api` | qualquer mudança de produto | diário |
 
 Separar repositórios cria imediatamente o problema de **como um stack descobre os recursos do
 outro**: a aplicação precisa do endpoint do RDS, o cluster precisa da VPC e das subnets, o gateway
@@ -59,7 +59,7 @@ Regras que acompanham a decisão:
   Manager (ver ADR-009).
 - Cada repositório tem seu próprio state (`oficina/<repo>/<env>/terraform.tfstate`) no bucket
   comum, com lock em DynamoDB `oficina-tflock`.
-- Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: inversa.
+- Ordem de `apply`: **fundação → cluster → gateway → api**. Ordem de `destroy`: inversa.
 - Cada repositório assume uma role própria via OIDC (`oficina-gha-<repo>`), com permissão de
   escrita apenas sobre o seu prefixo de parâmetros e leitura sobre os que consome.
 

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "f044085c-f925-5fe0-bcde-8570a3a0476d",
     "name": "Oficina Mecânica — Fase 3",
-    "description": "Coleção de demonstração do Tech Challenge Fase 3.\n\nAs pastas estão numeradas na ordem do vídeo: saúde → autenticação do cliente por CPF → login do admin → chamada sem token → escopo do cliente → CRUD de cliente → ciclo de vida da ordem de serviço.\n\nCada request tem um `pm.test` verificando o status esperado, então a coleção também roda como smoke test:\n\n    newman run docs/fase-3/postman/oficina-fase3.postman_collection.json \\\n      -e docs/fase-3/postman/hml.postman_environment.json\n\nOs tokens são salvos automaticamente em `tokenCliente` e `tokenAdmin` pelos scripts de teste — não é preciso copiar nada à mão.\n\nOs CPFs usados vêm do seed `003_seed_demo.sql` do repositório `oficina-infra-database` (aplicado só em hml).",
+    "description": "Coleção de demonstração do Tech Challenge Fase 3.\n\nAs pastas estão numeradas na ordem do vídeo: saúde → autenticação do cliente por CPF → login do admin → chamada sem token → escopo do cliente → CRUD de cliente → ciclo de vida da ordem de serviço.\n\nCada request tem um `pm.test` verificando o status esperado, então a coleção também roda como smoke test:\n\n    newman run docs/fase-3/postman/oficina-fase3.postman_collection.json \\\n      -e docs/fase-3/postman/hml.postman_environment.json\n\nOs tokens são salvos automaticamente em `tokenCliente` e `tokenAdmin` pelos scripts de teste — não é preciso copiar nada à mão.\n\nOs CPFs usados vêm do seed `003_seed_demo.sql` do repositório `oficina-infra-fundacao` (aplicado só em hml).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [

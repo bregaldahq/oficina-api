@@ -23,9 +23,9 @@ DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
 
 REPOS=(
-  "oficina-infra-database:Infraestrutura de banco de dados e rede (Terraform) - Tech Challenge Fase 3"
-  "oficina-infra-k8s:Infraestrutura Kubernetes EKS e add-ons (Terraform) - Tech Challenge Fase 3"
-  "oficina-lambda-auth:Function serverless de autenticacao por CPF e API Gateway - Tech Challenge Fase 3"
+  "oficina-infra-fundacao:Infraestrutura de banco de dados e rede (Terraform) - Tech Challenge Fase 3"
+  "oficina-infra-cluster:Infraestrutura Kubernetes EKS e add-ons (Terraform) - Tech Challenge Fase 3"
+  "oficina-gateway-auth:Function serverless de autenticacao por CPF e API Gateway - Tech Challenge Fase 3"
 )
 
 run() {
@@ -109,7 +109,7 @@ JSON
 done
 
 # O repositório da aplicação já existe; só aplica proteção e convida o avaliador.
-APP_REPO="oficina-mecanica-tech-challenge"
+APP_REPO="oficina-api"
 echo "==> $APP_REPO (repositório existente)"
 run gh api -X PUT "repos/$OWNER/$APP_REPO/collaborators/$COLLABORATOR" -f permission=push
 for branch in main develop; do

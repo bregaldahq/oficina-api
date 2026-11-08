@@ -7,8 +7,8 @@ Aceita (Fase 3).
 ## Contexto
 
 A Fase 3 quebra o que era um monolito containerizado em quatro artefatos com ciclos de vida
-próprios: a rede e o banco (`oficina-infra-database`), o cluster (`oficina-infra-k8s`), a função
-de autenticação (`oficina-lambda-auth`) e a aplicação (`oficina-mecanica-tech-challenge`). Com
+próprios: a rede e o banco (`oficina-infra-fundacao`), o cluster (`oficina-infra-cluster`), a função
+de autenticação (`oficina-gateway-auth`) e a aplicação (`oficina-api`). Com
 isso surge a pergunta de estilo de integração entre eles: chamadas síncronas ou mensageria?
 
 A tentação de usar SQS/SNS/EventBridge é grande porque "microsserviços usam eventos". Mas os
