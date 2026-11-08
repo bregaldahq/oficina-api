@@ -35,7 +35,7 @@ Manter o `JwtProvider` em PHP puro, com HS256, e elevá-lo à condição de **ar
 - Validação de `exp` e de `iss` (`oficina-mecanica-api`) em toda verificação.
 - O segredo é **injetado por construtor** (mudança da Fase 3): antes era lido direto de `$_ENV`,
   o que impedia o teste de contrato com segredo fixo.
-- O arquivo é **copiado byte a byte** para `oficina-lambda-auth`, e ambos os repositórios têm um
+- O arquivo é **copiado byte a byte** para `oficina-gateway-auth`, e ambos os repositórios têm um
   **teste de contrato** que gera o token com segredo `"contract-test-secret-do-not-use-in-prod"`
   e `iat = 1767225600` e compara com o mesmo literal hardcoded. Se um lado divergir, o outro
   quebra no CI.

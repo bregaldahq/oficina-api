@@ -9,7 +9,7 @@ kind: Kustomization
 # e um `kubectl apply -k` de rotina falharia. O pipeline o aplica à parte
 # (delete + apply), ver .github/workflows/deploy.yml.
 # O Namespace NAO esta aqui de proposito: ele pertence ao repositorio
-# oficina-infra-k8s (Contratos, secao 1). A aplicacao so implanta workloads.
+# oficina-infra-cluster (Contratos, secao 1). A aplicacao so implanta workloads.
 resources:
   - configmap.yaml
   - migrations-configmap.yaml

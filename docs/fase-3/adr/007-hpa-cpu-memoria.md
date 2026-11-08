@@ -48,7 +48,7 @@ Racional dos limiares:
   definidos no overlay, mantendo espaço para os DaemonSets do New Relic e do
   `aws-load-balancer-controller`.
 
-Pré-requisito operacional: o **metrics-server** é instalado pelo `oficina-infra-k8s` (WS-B4). Sem
+Pré-requisito operacional: o **metrics-server** é instalado pelo `oficina-infra-cluster` (WS-B4). Sem
 ele o HPA fica em `<unknown>` e nunca escala — é a falha silenciosa mais comum desse recurso.
 
 `requests` e `limits` de CPU e memória são **obrigatórios** no container: `Utilization` é

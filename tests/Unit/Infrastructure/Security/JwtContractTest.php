@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Cross-repository token contract (docs/fase-3/CONTRATOS.md §4 and docs/fase-3/contract-token.md).
  *
- * The auth Lambda (oficina-lambda-auth) issues the customer token and THIS application
+ * The auth Lambda (oficina-gateway-auth) issues the customer token and THIS application
  * revalidates it locally. Both sides must produce a byte-for-byte identical token for the same
  * inputs; if either side changes the header, the claim order or the base64url encoding, the
  * tokens minted by the Lambda start being rejected here in production.

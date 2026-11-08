@@ -27,7 +27,7 @@ A pergunta certa, portanto, não é "quem usa?", mas **"o que é durável e o qu
 
 ## Decisão
 
-O repositório **`oficina-infra-database` é a camada de fundação** e possui **tudo que é durável**:
+O repositório **`oficina-infra-fundacao` é a camada de fundação** e possui **tudo que é durável**:
 
 | Recurso | Por que é fundação |
 |---|---|
@@ -47,8 +47,8 @@ aplicação que valida) e, por HS256 (ADR-002), precisa ser exatamente o mesmo n
 com dois donos não tem dono; colocá-lo na camada mais estável garante que nenhum ciclo de vida
 mais curto o rotacione por acidente. O agrupamento é por **durabilidade**, não por assunto.
 
-O critério que fecha a decisão: **`terraform destroy` completo em `oficina-infra-k8s`,
-`oficina-lambda-auth` e no stack da aplicação não pode causar perda de dado nem invalidar tokens.**
+O critério que fecha a decisão: **`terraform destroy` completo em `oficina-infra-cluster`,
+`oficina-gateway-auth` e no stack da aplicação não pode causar perda de dado nem invalidar tokens.**
 
 ## Consequências
 

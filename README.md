@@ -1,11 +1,15 @@
 # Oficina Mecânica API
 
-[![CI/CD](https://github.com/bregaldahq/oficina-mecanica-tech-challenge/actions/workflows/ci-cd.yml/badge.svg?branch=main)](https://github.com/bregaldahq/oficina-mecanica-tech-challenge/actions/workflows/ci-cd.yml)
+[![Deploy](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml)
 [![PHP](https://img.shields.io/badge/PHP-8.2-blue?logo=php)](https://php.net)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0-orange?logo=mysql)](https://mysql.com)
 [![PHPUnit](https://img.shields.io/badge/Tests-PHPUnit%2011-green)](https://phpunit.de)
 [![OpenAPI](https://img.shields.io/badge/Docs-OpenAPI%203.0-brightgreen)](swagger.yaml)
 [![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)](Dockerfile)
+
+> Parte do sistema **Oficina Mecânica**. Comece pelo repositório principal, [`oficina-mecanica`](https://github.com/bregaldahq/oficina-mecanica): visão geral, mapa dos repositórios e regras para mudanças entre eles.
+>
+> [`oficina-infra-fundacao`](https://github.com/bregaldahq/oficina-infra-fundacao) → [`oficina-infra-cluster`](https://github.com/bregaldahq/oficina-infra-cluster) → [`oficina-gateway-auth`](https://github.com/bregaldahq/oficina-gateway-auth) → **`oficina-api`**
 
 API REST cloud-native em **PHP 8.2 puro** (sem frameworks MVC) para gerenciar o ciclo completo de atendimento de uma oficina mecânica. O projeto foi desenvolvido como **Tech Challenge** da pós-graduação SOAT (Software Architecture) e demonstra, na prática, DDD, Clean Architecture, TDD, observabilidade de saúde e automação de infraestrutura e entrega.
 
@@ -78,17 +82,20 @@ A divisão segue o **ciclo de vida** dos recursos, não as camadas técnicas (AD
 
 | Repositório | Possui | Muda |
 |---|---|---|
-| `oficina-infra-database` | VPC, subnets, RDS, **todos os segredos**, migrations | raríssimo |
-| `oficina-infra-k8s` | EKS, node group, add-ons, ECR, NLB interno + target group | ocasional |
-| `oficina-lambda-auth` | Lambdas `auth-cpf` e `jwt-authorizer`, API Gateway, VPC Link | ocasional |
-| **`oficina-mecanica-tech-challenge`** (este) | aplicação, `deploy/` em kustomize, Job de migration | diário |
+| [`oficina-infra-fundacao`](https://github.com/bregaldahq/oficina-infra-fundacao) | VPC, subnets, RDS, **todos os segredos**, migrations | raríssimo |
+| [`oficina-infra-cluster`](https://github.com/bregaldahq/oficina-infra-cluster) | EKS, node group, add-ons, ECR, NLB interno + target group | ocasional |
+| [`oficina-gateway-auth`](https://github.com/bregaldahq/oficina-gateway-auth) | Lambdas `auth-cpf` e `jwt-authorizer`, API Gateway, VPC Link | ocasional |
+| **`oficina-api`** (este) | aplicação, `deploy/` em kustomize, Job de migration | diário |
+
+O mapa completo do sistema, as convenções comuns e as ferramentas para operar os quatro juntos
+ficam no repositório principal, [`oficina-mecanica`](https://github.com/bregaldahq/oficina-mecanica).
 
 O acoplamento entre eles é **exclusivamente por SSM Parameter Store** — nenhum usa
 `terraform_remote_state` (ADR-008). O repositório de banco é a **camada de fundação**: possui tudo
 que é durável, de modo que o cluster pode ser destruído e recriado sem risco ao dado nem aos
 tokens em circulação (ADR-009).
 
-Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: inversa.
+Ordem de `apply`: **fundação → cluster → gateway → api**. Ordem de `destroy`: inversa.
 
 ### Arquitetura provisionada
 
@@ -246,7 +253,7 @@ customers ──────────────── vehicles
                └── service_order_status_history
 ```
 
-O schema é versionado em `migrations/NNN_<slug>.sql` no repositório `oficina-infra-database` e
+O schema é versionado em `migrations/NNN_<slug>.sql` no repositório `oficina-infra-fundacao` e
 aplicado pelo runner `bin/migrate.php`, que controla o que já rodou na tabela `schema_migrations`.
 O modelo de dados completo — diagrama ER, dicionário de dados e a justificativa da escolha do
 MySQL — está documentado naquele repositório e na
@@ -301,7 +308,7 @@ autenticação.
 ## Estrutura de Diretórios
 
 ```
-oficina-mecanica-tech-challenge/
+oficina-api/
 ├── src/
 │   ├── Domain/                     # sem nenhuma dependência externa
 │   │   ├── Aggregate/              # ServiceOrder (Aggregate Root, máquina de estados)
@@ -366,7 +373,7 @@ oficina-mecanica-tech-challenge/
 na máquina — `scripts/php.sh` e `scripts/composer.sh` executam tudo dentro de container.
 
 **Para implantar na AWS:** `kubectl`, `awscli` v2, `terraform` 1.5+ e uma conta AWS com os três
-repositórios de infraestrutura já aplicados na ordem **database → k8s → lambda**.
+repositórios de infraestrutura já aplicados na ordem **fundação → cluster → gateway**.
 
 ---
 
@@ -374,8 +381,8 @@ repositórios de infraestrutura já aplicados na ordem **database → k8s → la
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/bregaldahq/oficina-mecanica-tech-challenge.git
-cd oficina-mecanica-tech-challenge
+git clone https://github.com/bregaldahq/oficina-api.git
+cd oficina-api
 
 # 2. Configure as variáveis de ambiente
 cp .env.example .env
@@ -501,7 +508,7 @@ de integração usam SQLite in-memory via `PdoConnection::setInstance()`.
 Dois testes merecem destaque:
 
 - **Teste de contrato do token** — gera um JWT com segredo e `iat` fixos e compara com um literal
-  hardcoded. O repositório `oficina-lambda-auth` tem o **mesmo** teste com o **mesmo** literal: se
+  hardcoded. O repositório `oficina-gateway-auth` tem o **mesmo** teste com o **mesmo** literal: se
   um lado mudar a montagem do token, o outro quebra no CI. É o que sustenta a duplicação
   deliberada do `JwtProvider` (ADR-002).
 - **Testes da matriz de autorização** — cobrem rota por rota e papel por papel a tabela da seção 5
@@ -559,7 +566,7 @@ também uma **coleção Postman** com ambientes prontos em
 |---|---|
 | Documentação da API | Swagger UI em `/docs/` · [`swagger.yaml`](swagger.yaml) · [coleção Postman](docs/fase-3/postman/) |
 | Manifestos Kubernetes (kustomize) | [`deploy/`](deploy) |
-| Infraestrutura como Código | repositórios `oficina-infra-database`, `oficina-infra-k8s`, `oficina-lambda-auth` |
+| Infraestrutura como Código | repositórios `oficina-infra-fundacao`, `oficina-infra-cluster`, `oficina-gateway-auth` |
 | CI/CD | [`.github/workflows/pr.yml`](.github/workflows/pr.yml) · [`deploy.yml`](.github/workflows/deploy.yml) |
 | Decisões arquiteturais | [10 ADRs](docs/fase-3/adr/) · [3 RFCs](docs/fase-3/rfc/) |
 | Diagramas | [`docs/fase-3/diagramas/`](docs/fase-3/diagramas/) |
