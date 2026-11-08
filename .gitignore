@@ -2,6 +2,7 @@ vendor/
 .env
 coverage-report/
 .phpunit.cache/
+.php-cs-fixer.cache
 *.log
 
 # Os repositórios de infraestrutura viraram repositórios Git independentes
