@@ -24,21 +24,21 @@ segredos). O cluster pode ser destruído e recriado sem tocar nele.
 
 | Recurso | Repositório dono |
 |---|---|
-| VPC, subnets, IGW, route tables | `oficina-infra-database` |
-| Security groups de banco e de cliente de banco | `oficina-infra-database` |
-| RDS MySQL, subnet group, parameter group | `oficina-infra-database` |
-| **Todos** os segredos no Secrets Manager (banco e JWT) | `oficina-infra-database` |
-| Migrations SQL versionadas | `oficina-infra-database` |
-| EKS, node group, IRSA, add-ons Helm | `oficina-infra-k8s` |
-| ECR | `oficina-infra-k8s` |
-| NLB interno + Target Group | `oficina-infra-k8s` |
-| Namespaces, ClusterSecretStore | `oficina-infra-k8s` |
-| Lambdas (`auth-cpf`, `jwt-authorizer`) | `oficina-lambda-auth` |
-| API Gateway HTTP API, rotas, VPC Link, authorizer | `oficina-lambda-auth` |
-| Deployment, Service, HPA, Ingress da aplicação | `oficina-mecanica-tech-challenge` |
-| Job de migration (executa os SQL do repo de banco) | `oficina-mecanica-tech-challenge` |
+| VPC, subnets, IGW, route tables | `oficina-infra-fundacao` |
+| Security groups de banco e de cliente de banco | `oficina-infra-fundacao` |
+| RDS MySQL, subnet group, parameter group | `oficina-infra-fundacao` |
+| **Todos** os segredos no Secrets Manager (banco e JWT) | `oficina-infra-fundacao` |
+| Migrations SQL versionadas | `oficina-infra-fundacao` |
+| EKS, node group, IRSA, add-ons Helm | `oficina-infra-cluster` |
+| ECR | `oficina-infra-cluster` |
+| NLB interno + Target Group | `oficina-infra-cluster` |
+| Namespaces, ClusterSecretStore | `oficina-infra-cluster` |
+| Lambdas (`auth-cpf`, `jwt-authorizer`) | `oficina-gateway-auth` |
+| API Gateway HTTP API, rotas, VPC Link, authorizer | `oficina-gateway-auth` |
+| Deployment, Service, HPA, Ingress da aplicação | `oficina-api` |
+| Job de migration (executa os SQL do repo de banco) | `oficina-api` |
 
-Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: inversa.
+Ordem de `apply`: **fundação → cluster → gateway → api**. Ordem de `destroy`: inversa.
 
 ---
 
@@ -46,7 +46,7 @@ Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: i
 
 Acoplamento entre repos é **só** por SSM. Nenhum repo usa `terraform_remote_state` de outro.
 
-### Publicados por `oficina-infra-database`
+### Publicados por `oficina-infra-fundacao`
 
 | Parâmetro | Tipo | Conteúdo |
 |---|---|---|
@@ -61,7 +61,7 @@ Acoplamento entre repos é **só** por SSM. Nenhum repo usa `terraform_remote_st
 | `/oficina/<env>/db/secret_arn` | String | ARN do segredo de banco |
 | `/oficina/<env>/auth/secret_arn` | String | ARN do segredo de autenticação |
 
-### Publicados por `oficina-infra-k8s`
+### Publicados por `oficina-infra-cluster`
 
 | Parâmetro | Tipo | Conteúdo |
 |---|---|---|
@@ -75,7 +75,7 @@ Acoplamento entre repos é **só** por SSM. Nenhum repo usa `terraform_remote_st
 | `/oficina/<env>/nlb/target_group_arn` | String | ARN do target group (`target_type = ip`) — o `TargetGroupBinding` da aplicação aponta para ele |
 | `/oficina/<env>/eks/namespace` | String | `oficina-hml` ou `oficina-prod` |
 
-### Publicados por `oficina-lambda-auth`
+### Publicados por `oficina-gateway-auth`
 
 | Parâmetro | Tipo | Conteúdo |
 |---|---|---|
@@ -83,14 +83,14 @@ Acoplamento entre repos é **só** por SSM. Nenhum repo usa `terraform_remote_st
 | `/oficina/<env>/apigw/api_id` | String | id do HTTP API |
 
 > **Adendo 1 (integração, após WS-B).** O NLB interno, o target group e o listener são criados
-> **pelo Terraform** do repo `oficina-infra-k8s`, não pelo AWS Load Balancer Controller. Motivo: o
+> **pelo Terraform** do repo `oficina-infra-cluster`, não pelo AWS Load Balancer Controller. Motivo: o
 > repo da Lambda aplica antes do repo da aplicação e precisa dos ARNs já existentes; se o NLB
 > nascesse do `Service` da aplicação, os ARNs só existiriam depois — invertendo a ordem de apply
 > contratada na seção 1. O LB Controller apenas **registra os IPs dos Pods como targets**, através
 > de um recurso `TargetGroupBinding` declarado no `deploy/` da aplicação apontando para
 > `/oficina/<env>/nlb/target_group_arn`.
 >
-> **Adendo 2.** O `ClusterSecretStore` criado pelo `oficina-infra-k8s` chama-se
+> **Adendo 2.** O `ClusterSecretStore` criado pelo `oficina-infra-cluster` chama-se
 > **`oficina-secretsmanager`**. O `ExternalSecret` da aplicação DEVE referenciar exatamente esse
 > nome.
 >
@@ -113,7 +113,7 @@ data "aws_ssm_parameter" "vpc_id" {
 
 ## 3. Segredos no Secrets Manager
 
-Ambos criados pelo `oficina-infra-database`. Valores gerados por `random_password`, nunca
+Ambos criados pelo `oficina-infra-fundacao`. Valores gerados por `random_password`, nunca
 digitados nem commitados.
 
 **`oficina/<env>/db`** — JSON:
@@ -179,11 +179,18 @@ claims específicas vêm **primeiro** no JSON, depois `iss`, `iat`, `exp`. Mante
 
 ## 5. Rotas e autorização
 
-### API Gateway (`oficina-lambda-auth`)
+### API Gateway (`oficina-gateway-auth`)
 
 | Rota | Integração | Authorizer |
 |---|---|---|
 | `POST /auth/cpf` | Lambda `auth-cpf` | nenhum |
+| `GET /api/health` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /api/ready` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `POST /api/auth/login` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `POST /api/service-orders/{id}/approval` | HTTP_PROXY via VPC Link → NLB:80 | nenhum (a aplicação exige `X-Webhook-Token`) |
+| `GET /docs` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /docs/{proxy+}` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
+| `GET /swagger.yaml` | HTTP_PROXY via VPC Link → NLB:80 | nenhum |
 | `ANY /api/{proxy+}` | HTTP_PROXY via VPC Link → NLB:80 | Lambda `jwt-authorizer` |
 
 O `jwt-authorizer` é do tipo **REQUEST**, `payload_format_version = "2.0"`,
@@ -192,8 +199,15 @@ O `jwt-authorizer` é do tipo **REQUEST**, `payload_format_version = "2.0"`,
 
 Retorno: `{"isAuthorized": true|false, "context": {"customerId": "...", "role": "..."}}`.
 
-`POST /api/auth/login` passa pelo `{proxy+}` mas o authorizer **libera sem token** apenas essa
-rota (checa `$request.path`), pois é onde o admin obtém o token.
+> **Adendo 7 (rotas dedicadas).** Com `identity_sources = ["$request.header.Authorization"]`,
+> o HTTP API responde 401 **sem invocar** o `jwt-authorizer` quando o header falta. Por isso,
+> liberar uma rota dentro do authorizer não basta: toda rota que a aplicação declara sem JWT
+> (`requireAuth: false`) tem rota dedicada, sem authorizer, no `apigateway.tf`. É o caso das
+> sondas, do login do admin (que antes passava pelo `{proxy+}` com isenção no authorizer) e do
+> webhook de aprovação, protegido pela aplicação com `X-Webhook-Token`. A documentação
+> (`/docs`, `/swagger.yaml`) também tem rota dedicada; o nginx da aplicação a serve. A lista
+> `PUBLIC_ROUTES` do authorizer continua como defesa extra. O `bin/check-contracts.py` do
+> repositório principal confere essa coerência (`ROTA-1` a `ROTA-4`).
 
 ### Aplicação — matriz de autorização
 
@@ -233,7 +247,7 @@ Só CPF (11 dígitos) é aceito nesta rota — CNPJ retorna 400.
 
 ### Migrations
 
-Diretório `migrations/` no repo `oficina-infra-database`, arquivos `NNN_<slug>.sql`, aplicados em
+Diretório `migrations/` no repo `oficina-infra-fundacao`, arquivos `NNN_<slug>.sql`, aplicados em
 ordem lexicográfica pelo runner `bin/migrate.php` da aplicação.
 
 Tabela de controle (criada pelo próprio runner se não existir):
@@ -357,8 +371,8 @@ Não há PHP nem Composer nesta máquina — use Docker:
 ```bash
 scripts/php.sh vendor/bin/phpunit
 scripts/php.sh vendor/bin/phpstan analyse --no-progress
-terraform -chdir=repos/oficina-infra-database fmt -check -recursive
-terraform -chdir=repos/oficina-infra-database init -backend=false && terraform ... validate
+terraform -chdir=repos/oficina-infra-fundacao fmt -check -recursive
+terraform -chdir=repos/oficina-infra-fundacao init -backend=false && terraform ... validate
 ```
 
 `terraform validate` sem credencial funciona com `-backend=false`. Isso é o teto de verificação

@@ -3,7 +3,7 @@
 # COMO OS ARQUIVOS SQL CHEGAM AQUI
 # --------------------------------
 # As migrations versionadas (`NNN_<slug>.sql`) vivem no repositório
-# `oficina-infra-database`, não neste. A abordagem escolhida é **git clone em um
+# `oficina-infra-fundacao`, não neste. A abordagem escolhida é **git clone em um
 # initContainer**, numa ref imutável:
 #
 #   1. o initContainer `fetch-migrations` faz `git clone --depth 1 --branch

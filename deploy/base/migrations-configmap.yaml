@@ -7,5 +7,5 @@ metadata:
 # Origem das migrations SQL consumidas pelo Job `oficina-migrate`.
 # MIGRATIONS_REF é fixada pelo pipeline na tag/sha aprovada para o ambiente.
 data:
-  MIGRATIONS_REPO_URL: "https://github.com/bregaldahq/oficina-infra-database.git"
+  MIGRATIONS_REPO_URL: "https://github.com/bregaldahq/oficina-infra-fundacao.git"
   MIGRATIONS_REF: "main"

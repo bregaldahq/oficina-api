@@ -32,7 +32,7 @@
 
 ## Dados
 
-Os CPFs vêm do seed `003_seed_demo.sql` do repositório `oficina-infra-database`
+Os CPFs vêm do seed `003_seed_demo.sql` do repositório `oficina-infra-fundacao`
 (aplicado apenas em hml):
 
 | CPF | Cliente | Status | Uso |

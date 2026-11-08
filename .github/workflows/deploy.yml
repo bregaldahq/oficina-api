@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       migrations_ref:
-        description: "Ref do repositório oficina-infra-database com as migrations"
+        description: "Ref do repositório oficina-infra-fundacao com as migrations"
         required: false
         default: ""
 
@@ -113,7 +113,7 @@ jobs:
           (cd "$OVERLAY" && kustomize edit set image \
             "oficina-api=${{ steps.ssm.outputs.ecr_url }}:${{ github.sha }}")
           # O ARN do target group vem do SSM e varia por ambiente (adendo 1 dos
-          # Contratos): o NLB e o TG são do repo oficina-infra-k8s.
+          # Contratos): o NLB e o TG são do repo oficina-infra-cluster.
           sed -i "s#TARGET_GROUP_ARN_PLACEHOLDER#${{ steps.ssm.outputs.target_group_arn }}#" \
             deploy/base/targetgroupbinding.yaml
           # O Job de migration e aplicado fora do kustomize (Jobs sao imutaveis, um
@@ -133,7 +133,7 @@ jobs:
         run: kubectl apply -k "$OVERLAY"
 
       # ── Migrations ────────────────────────────────────────────────────────
-      # O Job aplica os SQL versionados que vêm do repo oficina-infra-database
+      # O Job aplica os SQL versionados que vêm do repo oficina-infra-fundacao
       # (clone em initContainer, ver deploy/base/migration-job.yaml).
       # A spec de um Job é imutável: apagamos e recriamos a cada deploy.
       - name: Rodar Job de migration

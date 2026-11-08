@@ -58,7 +58,7 @@ services:
       - oficina_network
 
   # Ambiente de desenvolvimento: o MySQL continua em container. Em hml/prod o
-  # banco é o RDS provisionado pelo repositório oficina-infra-database.
+  # banco é o RDS provisionado pelo repositório oficina-infra-fundacao.
   db:
     image: mysql:8.0
     container_name: oficina_db
