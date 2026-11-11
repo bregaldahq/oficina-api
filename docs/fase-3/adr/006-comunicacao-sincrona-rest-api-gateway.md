@@ -2,7 +2,7 @@
 
 ## Status
 
-Aceita (Fase 3).
+Aceita (Fase 3) · Substituída em parte pela [ADR-013](../../fase-4/adr/013-mensageria-com-sns-e-sqs.md) na Fase 4: a integração entre serviços passa a ser por mensageria; o tráfego do cliente continua como descrito aqui.
 
 ## Contexto
 

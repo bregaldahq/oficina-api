@@ -23,6 +23,10 @@ Formato usado: `Status` · `Contexto` · `Decisão` · `Consequências` (positiv
 | [009](009-banco-como-camada-de-fundacao.md) | O repositório de banco é a camada de fundação | 3 | Aceita |
 | [010](010-nodes-em-subnet-publica-sem-nat.md) | Nodes do EKS em subnet pública, sem NAT Gateway | 3 | Aceita **com ressalva** |
 
+As ADRs 011 a 017, da Fase 4 (microsserviços, saga, mensageria), estão em
+[`../../fase-4/adr/`](../../fase-4/adr/README.md). Elas substituem em parte a 006, ampliam a 008
+e restringem a 009.
+
 ## Como as decisões se relacionam
 
 ```mermaid
