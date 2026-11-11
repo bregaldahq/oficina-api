@@ -29,6 +29,9 @@ ambiente de teste.
   pagamento na API** do Mercado Pago. Só o resultado dessa consulta confirma ou recusa.
 - **Estorno** pela API de reembolso, disparado pelo comando `billing.refund-payment` quando o
   reparo falha.
+- **A cobrança expira no prazo do passo de pagamento**, e cancelar o orçamento a invalida. Se
+  ainda assim um pagamento for confirmado para um orçamento cancelado, o Faturamento estorna
+  por conta própria e publica `payment.refunded`.
 - Toda chamada de escrita leva `X-Idempotency-Key` derivada do id do orçamento, para que uma
   reentrega da mensagem não crie duas cobranças nem dois estornos.
 - No domínio do Faturamento existe a porta `PaymentGateway`, com dois adaptadores: o do Mercado

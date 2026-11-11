@@ -40,8 +40,7 @@ Cada serviço tem um perfil de dados diferente:
 
 **Positivas**
 
-- Isolamento sem ressalva: instâncias e credenciais distintas, e nenhum caminho de rede de um
-  serviço ao banco do outro.
+- Instâncias e credenciais distintas: nenhum serviço recebe a credencial do banco de outro.
 - A Execução não tem banco para administrar, nem custo quando parada.
 - Cada serviço evolui o próprio schema sem coordenar com os outros.
 
@@ -52,6 +51,9 @@ Cada serviço tem um perfil de dados diferente:
   cliente ou projeção por evento.
 - Dois modelos de persistência para dominar: PDO/MySQL e DynamoDB.
 - O login do cliente passa a depender do serviço de OS, e não só do banco.
+- O isolamento é por credencial, não por rede: os nodes carregam o SG que alcança os dois RDS,
+  então um pod comprometido que obtivesse a senha de outro serviço chegaria ao banco dele.
+  Fechar isso pede security groups por pod, que ficam fora desta fase.
 
 ## Alternativas consideradas
 

@@ -33,6 +33,9 @@ Acrescenta à tabela da Fase 3. São seis repositórios (ADR-016).
 | Listener e target group de cada serviço no NLB interno | `oficina-infra-cluster` |
 | RBAC de deploy dos três serviços | `oficina-infra-cluster` |
 | Rotas por serviço no API Gateway | `oficina-gateway-auth` |
+| SG do VPC Link com saída para as portas 80 a 82 do NLB (hoje só a 80) | `oficina-gateway-auth` |
+| SG próprio da Lambda `auth-cpf` (saída 80 para o NLB e 443 para o endpoint do Secrets Manager) | `oficina-gateway-auth` |
+| SG do endpoint do Secrets Manager aceitando 443 do CIDR da VPC (hoje só do SG `db-client`) | `oficina-infra-fundacao` |
 | Fila SQS, DLQ e assinatura do tópico de cada serviço | `infra/` do repo do serviço |
 | Role IRSA de cada serviço | `infra/` do repo do serviço |
 | ECR de `oficina-faturamento` e `oficina-execucao` | `infra/` do repo do serviço |
@@ -46,8 +49,17 @@ O ECR do OS continua no `oficina-infra-cluster`, como na Fase 3.
 > os segredos **compartilhados** (`oficina/<env>/db`, do OS, e `oficina/<env>/auth`). Segredo
 > que só um serviço lê nasce no `infra/` desse serviço.
 
+> **Adendo F4-2 (`infra/` nos repos de serviço).** A seção 8 da Fase 3 removeu `infra/` do
+> `oficina-api`. Ele volta, com outro conteúdo: só os recursos do próprio serviço (fila, DLQ,
+> assinatura, role IRSA). State em `oficina/oficina-api/<env>/terraform.tfstate`, no mesmo
+> bucket. O role de CI do repo ganha as permissões desse Terraform no `bootstrap/aws/`.
+
 Ordem de `apply`: **fundação → cluster → gateway → `infra/` de cada serviço → deploy de cada
 serviço**. Os três serviços não dependem uns dos outros para subir. `destroy`: inversa.
+
+Essa é a ordem para erguer um ambiente do zero. Para **mudar** um contrato vale a regra de
+sempre: o produtor entra antes do consumidor. O caso desta fase em que isso inverte a ordem
+acima é a `auth-cpf` (§7): o OS com a rota interna entra antes da Lambda que a chama.
 
 ---
 
@@ -105,7 +117,17 @@ O segredo do Mercado Pago é criado pelo Terraform com valor provisório e
 conta. Nenhum pipeline nem agente lê esse valor.
 
 Cada serviço materializa os segredos com um `ExternalSecret` no `ClusterSecretStore`
-`oficina-secretsmanager`. A policy do External Secrets precisa alcançar `oficina/<env>/*`.
+`oficina-secretsmanager`. A policy do External Secrets, hoje restrita aos dois segredos da
+Fase 3, passa a alcançar `oficina/<env>/*` (`oficina-infra-cluster`).
+
+Cada `ExternalSecret` mapeia **só as chaves que o serviço usa**. De `oficina/<env>/auth`:
+
+| Serviço | Chaves |
+|---|---|
+| OS | `JWT_SECRET`, `JWT_EXPIRATION`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `INTERNAL_TOKEN` |
+| Faturamento | `JWT_SECRET`, `WEBHOOK_TOKEN` |
+| Execução | `JWT_SECRET` |
+| Lambdas | `JWT_SECRET`, `JWT_EXPIRATION`; a `auth-cpf` também `INTERNAL_TOKEN` |
 
 A Execução não tem segredo de banco: acessa o DynamoDB com o role IRSA.
 
@@ -126,8 +148,8 @@ Cada serviço tem um prefixo. O API Gateway escolhe a rota mais específica.
 | `GET /api/execution/health`, `GET /api/execution/ready` | NLB `:82` | nenhum |
 | `POST /api/billing/budgets/{id}/approval` | NLB `:81` | nenhum (o serviço exige `X-Webhook-Token`) |
 | `POST /api/billing/payments/webhook/mercadopago` | NLB `:81` | nenhum (o serviço valida a assinatura) |
-| `GET /api/billing/docs`, `GET /api/billing/swagger.yaml` | NLB `:81` | nenhum |
-| `GET /api/execution/docs`, `GET /api/execution/swagger.yaml` | NLB `:82` | nenhum |
+| `GET /api/billing/docs`, `GET /api/billing/docs/{proxy+}`, `GET /api/billing/swagger.yaml` | NLB `:81` | nenhum |
+| `GET /api/execution/docs`, `GET /api/execution/docs/{proxy+}`, `GET /api/execution/swagger.yaml` | NLB `:82` | nenhum |
 
 As rotas públicas do OS (`/api/health`, `/api/ready`, `/api/auth/login`, `/docs`,
 `/swagger.yaml`) e `POST /auth/cpf` continuam como na Fase 3. O Adendo 7 da Fase 3 continua
@@ -143,8 +165,9 @@ valendo: toda rota sem JWT tem rota dedicada sem authorizer.
 |---|---|
 | `GET /api/health`, `GET /api/ready`, `POST /api/auth/login` | público, como na Fase 3 |
 | `POST /api/service-orders` | `admin` — abre a OS e **inicia a saga** |
-| `GET /api/service-orders`, `GET /api/service-orders/me`, `GET /api/service-orders/{id}` | como na Fase 3; a resposta ganha `saga` (passo atual e histórico) |
+| `GET /api/service-orders`, `GET /api/service-orders/me`, `GET /api/service-orders/{id}` | como na Fase 3; a resposta ganha `budget_id`, `payment_url` (quando houver cobrança em aberto) e `saga` (estado, passo atual, histórico e compensações pendentes) |
 | `POST /api/service-orders/{id}/delivery` | `admin` — `FINISHED → DELIVERED` |
+| `POST /api/service-orders/{id}/cancellation` | `admin` — corpo com `reason`; cancela a OS e inicia a compensação do que já foi feito (§6.2). Recusada depois de `FINISHED` |
 | `/api/customers/**`, `/api/vehicles/**` | `admin`, como na Fase 3 |
 | `GET /internal/customers/by-document/{document}` | header `X-Internal-Token` obrigatório; devolve `id`, `name`, `document`, `status` |
 
@@ -161,9 +184,10 @@ valendo: toda rota sem JWT tem rota dedicada sem authorizer.
 | Rota | Acesso |
 |---|---|
 | `GET /api/billing/health`, `GET /api/billing/ready` | público |
+| `GET /api/billing/docs`, `GET /api/billing/docs/{proxy+}`, `GET /api/billing/swagger.yaml` | público |
 | `/api/billing/service-items/**`, `/api/billing/parts/**` | `admin` (as mesmas operações que o OS tinha) |
 | `GET /api/billing/budgets` | `admin` |
-| `GET /api/billing/budgets/{id}`, `GET /api/billing/budgets/by-order/{orderId}` | `admin`, ou `customer` dono do orçamento |
+| `GET /api/billing/budgets/{id}`, `GET /api/billing/budgets/by-order/{orderId}` | `admin`, ou `customer` dono do orçamento; a resposta traz o pagamento (`payment_id`, `status`, `payment_url`) quando existir |
 | `POST /api/billing/budgets/{id}/approval` | header `X-Webhook-Token` obrigatório; corpo `{"approved": true\|false}` |
 | `GET /api/billing/payments/{id}` | `admin`, ou `customer` dono |
 | `POST /api/billing/payments/webhook/mercadopago` | assinatura `x-signature` válida |
@@ -173,6 +197,7 @@ valendo: toda rota sem JWT tem rota dedicada sem authorizer.
 | Rota | Acesso |
 |---|---|
 | `GET /api/execution/health`, `GET /api/execution/ready` | público |
+| `GET /api/execution/docs`, `GET /api/execution/docs/{proxy+}`, `GET /api/execution/swagger.yaml` | público |
 | `GET /api/execution/tasks` (filtro `status`), `GET /api/execution/tasks/{id}` | `admin` |
 | `POST /api/execution/tasks/{id}/diagnosis/start` | `admin` |
 | `POST /api/execution/tasks/{id}/diagnosis/complete` | `admin` — corpo com os itens (`service_item_id` ou `part_id`, e `quantity`) |
@@ -229,7 +254,7 @@ nova e os dois lados aceitando as duas durante a troca.
 |---|---|---|
 | `execution.request-diagnosis` | os → execucao | `customer_name`, `vehicle` (`license_plate`, `brand`, `model`), `description` |
 | `billing.generate-budget` | os → faturamento | `customer` (`id`, `name`, `email`), `items[]` (`kind`: `service`\|`part`, `id`, `quantity`) |
-| `billing.charge` | os → faturamento | `budget_id` |
+| `billing.charge` | os → faturamento | `budget_id`, `expires_at` (o prazo do passo; a cobrança expira nele) |
 | `execution.start-repair` | os → execucao | `items[]` |
 | `execution.cancel` | os → execucao | `reason` |
 | `billing.cancel-budget` | os → faturamento | `budget_id`, `reason` |
@@ -270,8 +295,16 @@ Todo tipo publicado tem pelo menos um consumidor, e todo tipo consumido tem prod
   transação do efeito. Mensagem com `id` já registrado é confirmada sem efeito.
 - **Comando repetido devolve o mesmo resultado.** Receber `billing.generate-budget` duas vezes
   para a mesma `saga_id` não cria dois orçamentos.
-- **Evento fora de hora é ignorado.** O orquestrador só aceita o evento que o passo atual da
-  saga espera; os demais são registrados em log e confirmados.
+- **Evento fora de hora é ignorado.** O orquestrador só aceita os eventos do passo atual da
+  saga; os demais são registrados em log e confirmados.
+- **Evento adiantado dentro do passo vale pelos dois.** A entrega não tem ordem: se
+  `diagnosis.completed` chegar antes de `diagnosis.started`, ou `payment.confirmed` antes de
+  `payment.created`, o orquestrador aplica as duas transições em sequência. O evento
+  intermediário, quando chegar, é ignorado.
+- **Pagamento de orçamento cancelado é estornado pelo Faturamento.** Se a confirmação de um
+  pagamento chegar para um orçamento já cancelado (o cliente pagou depois do prazo, ou a
+  confirmação cruzou com o cancelamento), o Faturamento estorna por conta própria e publica
+  `payment.refunded`, sem esperar comando. Dinheiro nunca fica retido numa OS cancelada.
 - A mensagem que falha 5 vezes vai para a DLQ, que tem alerta (§8).
 
 ---
@@ -285,41 +318,61 @@ Orquestrada, com o orquestrador no OS (ADR-012). Estado em `sagas`, no banco do 
 | Passo (`step`) | Ao entrar, o orquestrador | Espera | Efeito na OS |
 |---|---|---|---|
 | `DIAGNOSIS` | publica `execution.request-diagnosis` | `diagnosis.started`, depois `diagnosis.completed` | `diagnosis.started` → `DIAGNOSIS` |
-| `BUDGET` | publica `billing.generate-budget` | `budget.generated` | → `AWAITING_APPROVAL`, grava `budget_id` e o total |
+| `BUDGET` | publica `billing.generate-budget`, com prazo técnico | `budget.generated` | → `AWAITING_APPROVAL`, grava `budget_id` e o total |
 | `APPROVAL` | nada (espera o cliente), com prazo | `budget.approved` | → `AWAITING_PAYMENT` |
-| `PAYMENT` | publica `billing.charge`, com prazo | `payment.created`, depois `payment.confirmed` | `payment.confirmed` → `EXECUTING` |
+| `PAYMENT` | publica `billing.charge`, com prazo | `payment.created`, depois `payment.confirmed` | `payment.created` grava o `payment_url` na OS; `payment.confirmed` → `EXECUTING` |
 | `REPAIR` | publica `execution.start-repair` | `repair.completed` | → `FINISHED` |
+
+`repair.started` é informativo: o orquestrador registra no histórico da saga e não muda o
+status da OS.
 
 A saga termina em `COMPLETED` quando a OS chega a `FINISHED`. A entrega (`DELIVERED`) é manual
 e fica fora da saga.
 
 ### 6.2 Falhas e compensações
 
-| Falha | Compensações, na ordem | Status final da OS |
+**Regra.** Ao falhar, a saga compensa **o que já foi feito**, do mais recente para o mais
+antigo:
+
+| Se já existe | Compensação | Confirmação |
 |---|---|---|
-| `diagnosis.failed` | nenhuma (nada foi feito fora da Execução) | `CANCELLED` |
-| `budget.failed` | `execution.cancel` | `CANCELLED` |
+| pagamento confirmado | `billing.refund-payment` | `payment.refunded` |
+| orçamento gerado e ainda não rejeitado nem cancelado | `billing.cancel-budget` (libera o estoque e invalida a cobrança em aberto) | `budget.cancelled` |
+| tarefa aberta na Execução | `execution.cancel` | `execution.cancelled` |
+
+Aplicada a cada falha:
+
+| Falha | Compensações | Status da OS |
+|---|---|---|
+| `diagnosis.failed` | nenhuma (a Execução já encerrou a tarefa) | `CANCELLED` |
+| `budget.failed` ou prazo do orçamento vencido | `execution.cancel` (e `billing.cancel-budget`, no caso do prazo, porque o orçamento pode ter sido gerado sem o evento ter chegado) | `CANCELLED` |
 | `budget.rejected` | `execution.cancel` (o Faturamento já liberou o estoque ao rejeitar) | `REJECTED` |
 | prazo de aprovação vencido | `billing.cancel-budget`, `execution.cancel` | `CANCELLED` |
 | `payment.failed` ou prazo de pagamento vencido | `billing.cancel-budget`, `execution.cancel` | `CANCELLED` |
-| `repair.failed` | `billing.refund-payment`, `billing.cancel-budget` | `CANCELLED` |
+| `repair.failed` | `billing.refund-payment`, `billing.cancel-budget` (a Execução já encerrou a tarefa) | `CANCELLED` |
+| cancelamento pelo admin (`POST .../cancellation`), em qualquer passo | as da regra, conforme o que já existe | `CANCELLED` |
 
-- Durante a compensação a saga fica em `COMPENSATING`. Ela só passa a `COMPENSATED` quando cada
-  compensação foi confirmada pelo evento correspondente (`execution.cancelled`,
-  `budget.cancelled`, `payment.refunded`).
+- **A OS muda de status ao entrar em compensação**, na mesma transação: o cliente vê
+  `CANCELLED` (ou `REJECTED`) de imediato. A saga fica em `COMPENSATING` e só passa a
+  `COMPENSATED` quando cada compensação foi confirmada pelo evento correspondente.
 - Compensação é idempotente e reenviada com recuo até a confirmação. Esgotadas as tentativas, a
-  saga fica em `FAILED`, com alerta: é o caso que pede uma pessoa.
-- `billing.cancel-budget` libera a reserva de estoque. `billing.refund-payment` estorna no
-  Mercado Pago.
+  saga fica em `FAILED`, com alerta: é o caso que pede uma pessoa. A OS continua `CANCELLED`, e
+  a resposta da OS lista em `saga` as compensações pendentes.
+- Comando de compensação para algo que não existe (por exemplo, `billing.cancel-budget` para
+  uma saga sem orçamento) é respondido com o evento de confirmação, sem efeito.
+- Pagamento que chega depois do cancelamento é estornado pelo próprio Faturamento (§5.4).
 
 ### 6.3 Prazos
 
-| Variável (OS) | Padrão | hml |
-|---|---|---|
-| `SAGA_APPROVAL_TIMEOUT_SECONDS` | 259200 (72 h) | 600 |
-| `SAGA_PAYMENT_TIMEOUT_SECONDS` | 86400 (24 h) | 600 |
+| Variável (OS) | Vencido o prazo | Padrão | hml |
+|---|---|---|---|
+| `SAGA_BUDGET_TIMEOUT_SECONDS` | compensa (§6.2) | 300 | 300 |
+| `SAGA_APPROVAL_TIMEOUT_SECONDS` | compensa | 259200 (72 h) | 600 |
+| `SAGA_PAYMENT_TIMEOUT_SECONDS` | compensa | 86400 (24 h) | 600 |
+| `SAGA_WORK_ALERT_SECONDS` | **só alerta** (`DIAGNOSIS` e `REPAIR` dependem do mecânico; quem decide cancelar é o admin) | 172800 (48 h) | 1800 |
 
-O worker do OS varre `sagas` procurando `deadline_at` vencido.
+O worker do OS varre `sagas` procurando `deadline_at` vencido. Todo passo tem prazo: nenhum
+fica sem saída.
 
 ### 6.4 Status da OS
 
@@ -346,8 +399,9 @@ Cada transição continua sendo um método nomeado do agregado (ADR-003); não h
 
 ### OS — migrations novas na fundação
 
-- `004_fase4_saga.sql`: `AWAITING_PAYMENT` e `CANCELLED` no status da OS e do histórico;
-  `service_orders.budget_id`; tabelas `sagas`, `outbox` e `inbox`.
+- `004_fase4_saga.sql`: `AWAITING_PAYMENT` e `CANCELLED` no `ENUM` de `service_orders.status`
+  (o histórico é `VARCHAR` e não muda); `service_orders.budget_id` e `payment_url`; tabelas
+  `sagas`, `outbox` e `inbox`.
 - `005_fase4_remove_catalogo.sql`: remove `service_catalog`, `parts_inventory`,
   `service_order_services` e `service_order_parts`. **Só entra depois** de o OS em produção
   ter parado de ler essas tabelas (remoção: primeiro o consumidor, depois o produtor).
@@ -362,6 +416,22 @@ Deixa de ler `customers` no RDS. Passa a chamar
 isso a Lambda deixa de usar o segredo `oficina/<env>/db`, os parâmetros `/oficina/<env>/db/*`
 e o SG `db-client`. Os códigos de erro do `POST /auth/cpf` não mudam; OS indisponível responde
 `503`.
+
+Rede: hoje é o SG `db-client` que dá à Lambda acesso ao endpoint do Secrets Manager, e ele não
+tem saída para a porta 80. Por isso a Lambda ganha um SG próprio e o SG do endpoint passa a
+aceitar o CIDR da VPC (§1). O acesso ao segredo continua restrito pelo IAM.
+
+Ordem desta mudança: fundação (`INTERNAL_TOKEN`, SG do endpoint) → cluster (`nlb/dns_name`) →
+OS com a rota interna **em produção** → só então a `auth-cpf` nova. A Lambda antiga continua
+funcionando até lá.
+
+### Isolamento de rede
+
+Os nodes do EKS carregam o SG `db-client` (Fase 3, §2), então todo pod alcança a porta do RDS
+do OS. O isolamento entre o banco do OS e os outros serviços é **por credencial**: só o OS
+recebe o segredo `oficina/<env>/db`. O RDS do Faturamento tem SG próprio, que aceita os nodes;
+só o Faturamento recebe a credencial dele. Isolar também por rede exigiria security groups por
+pod, o que fica fora desta fase.
 
 ### Execução — desenho da tabela
 

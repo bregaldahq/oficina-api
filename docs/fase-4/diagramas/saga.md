@@ -61,14 +61,14 @@ sequenceDiagram
     Note over OS: OS EXECUTING · saga em REPAIR
     M->>EX: repair/fail (motivo)
     EX-->>OS: repair.failed
-    Note over OS: saga COMPENSATING
+    Note over OS: OS CANCELLED · saga COMPENSATING
     OS-->>FA: billing.refund-payment
     FA->>MP: estorno
     FA-->>OS: payment.refunded
     OS-->>FA: billing.cancel-budget
     Note over FA: reserva de estoque liberada
     FA-->>OS: budget.cancelled
-    Note over OS: OS CANCELLED · saga COMPENSATED
+    Note over OS: saga COMPENSATED
 ```
 
 ## Todas as falhas
@@ -84,7 +84,7 @@ stateDiagram-v2
     COMPLETED --> [*]
 
     DIAGNOSIS --> COMPENSATING: diagnosis.failed
-    BUDGET --> COMPENSATING: budget.failed
+    BUDGET --> COMPENSATING: budget.failed ou prazo
     APPROVAL --> COMPENSATING: budget.rejected ou prazo
     PAYMENT --> COMPENSATING: payment.failed ou prazo
     REPAIR --> COMPENSATING: repair.failed
@@ -103,6 +103,11 @@ stateDiagram-v2
 | `APPROVAL` (prazo) | tarefa, orçamento com estoque reservado | cancela o orçamento e a tarefa |
 | `PAYMENT` | tarefa, orçamento com estoque reservado, cobrança criada | cancela o orçamento e a tarefa |
 | `REPAIR` | tudo, inclusive o pagamento | estorna o pagamento e cancela o orçamento |
+
+O admin também pode cancelar a OS em qualquer passo antes de `FINISHED`; a compensação segue a
+mesma regra, desfazendo o que já existe. A OS passa a `CANCELLED` (ou `REJECTED`) no momento em
+que a saga entra em `COMPENSATING`. Um pagamento confirmado depois do cancelamento é estornado
+pelo próprio Faturamento.
 
 ## Status da OS
 
