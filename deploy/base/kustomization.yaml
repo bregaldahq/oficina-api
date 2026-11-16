@@ -15,7 +15,9 @@ resources:
   - migrations-configmap.yaml
   - nginx-configmap.yaml
   - external-secret.yaml
+  - serviceaccount.yaml
   - api-deployment.yaml
+  - worker-deployment.yaml
   - hpa.yaml
   - targetgroupbinding.yaml
 

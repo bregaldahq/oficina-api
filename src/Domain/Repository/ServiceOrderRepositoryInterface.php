@@ -38,6 +38,4 @@ interface ServiceOrderRepositoryInterface
      * and decrements parts_inventory.stock_quantity (within a transaction).
      */
     public function save(ServiceOrder $order): void;
-
-    public function updateStatus(ServiceOrder $order): void;
 }

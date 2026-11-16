@@ -24,14 +24,19 @@ info:
     | `GET /api/ready` | público — readiness, checa o banco |
     | `POST /auth/cpf` | público (API Gateway → Lambda) |
     | `POST /api/auth/login` | público (admin obtém o token) |
-    | `POST /api/service-orders/{id}/approval` | header `X-Webhook-Token` **obrigatório** |
     | `GET /api/service-orders/me` | `customer` ou `admin` |
     | `GET /api/service-orders/{id}` | `admin`, ou o `customer` dono da ordem |
     | **todo o resto de `/api/**`** | `admin` |
 
-    Ou seja: exceto `health`, `ready`, `login`, `approval`, `me` e a consulta de uma ordem pelo
+    Ou seja: exceto `health`, `ready`, `login`, `me` e a consulta de uma ordem pelo
     próprio dono, **todas as demais rotas exigem `role=admin`** e respondem `403` para um token
     de cliente.
+
+    **Fase 4:** este é o serviço de OS e o orquestrador da saga (docs/fase-4/CONTRATOS.md). Abrir
+    uma OS inicia a saga; daí em diante o status é movido pelos eventos da Execução e do
+    Faturamento, e só a entrega e o cancelamento são manuais. Catálogo, estoque, orçamento,
+    aprovação e pagamento estão no serviço de Faturamento (`/api/billing`); diagnóstico e
+    reparo, no de Execução (`/api/execution`).
 
     **Erros:** Todos os erros retornam `{"error": "mensagem descritiva"}`. Códigos:
     - `400` — Campos obrigatórios ausentes ou inválidos
@@ -67,12 +72,8 @@ tags:
     description: Gerenciamento de clientes
   - name: Veículos
     description: Gerenciamento de veículos
-  - name: Peças
-    description: Catálogo e controle de estoque de peças
-  - name: Serviços
-    description: Catálogo de serviços e métricas
   - name: Ordens de Serviço
-    description: Ciclo de vida completo das ordens de serviço
+    description: Abertura (inicia a saga), consulta com o andamento da saga, entrega e cancelamento
 
 components:
   securitySchemes:
@@ -207,71 +208,18 @@ components:
           minimum: 1886
           example: 2020
 
-    Part:
-      type: object
-      properties:
-        id:
-          type: string
-          format: uuid
-        description:
-          type: string
-          example: Filtro de óleo
-        price:
-          type: number
-          format: float
-          example: 45.90
-        stock_quantity:
-          type: integer
-          example: 50
-
-    ServiceItem:
-      type: object
-      properties:
-        id:
-          type: string
-          format: uuid
-        description:
-          type: string
-          example: Troca de óleo
-        base_price:
-          type: number
-          format: float
-          example: 150.00
-        estimated_time_minutes:
-          type: integer
-          example: 60
-
-    ServiceItemMetric:
-      type: object
-      properties:
-        service_item_id:
-          type: string
-          format: uuid
-        description:
-          type: string
-          example: Troca de óleo
-        estimated_time_minutes:
-          type: integer
-          example: 60
-        times_executed:
-          type: integer
-          description: Quantidade de ordens de serviço que usaram este serviço
-          example: 12
-        total_estimated_minutes:
-          type: integer
-          description: Total acumulado de minutos estimados para este serviço
-          example: 720
-
     OrderStatus:
       type: string
       enum:
         - RECEIVED
         - DIAGNOSIS
         - AWAITING_APPROVAL
+        - AWAITING_PAYMENT
         - EXECUTING
         - REJECTED
         - FINISHED
         - DELIVERED
+        - CANCELLED
 
     ServiceOrder:
       type: object
@@ -285,33 +233,52 @@ components:
           $ref: '#/components/schemas/Vehicle'
         status:
           $ref: '#/components/schemas/OrderStatus'
-        services:
+        total_amount:
+          type: number
+          format: float
+          example: 558.00
+          description: Total do orçamento, vindo do Faturamento
+        budget_id:
+          type: string
+          nullable: true
+          description: Orçamento no serviço de Faturamento
+        payment_url:
+          type: string
+          nullable: true
+          description: Link de pagamento, só enquanto `AWAITING_PAYMENT`
+        created_at:
+          type: string
+          format: date-time
+        saga:
+          $ref: '#/components/schemas/Saga'
+
+    Saga:
+      type: object
+      nullable: true
+      description: Andamento da saga (OS da Fase 3, abertas antes da saga, não têm)
+      properties:
+        id: { type: string }
+        state:
+          type: string
+          enum: [RUNNING, COMPENSATING, COMPLETED, COMPENSATED, FAILED]
+        step:
+          type: string
+          enum: [DIAGNOSIS, BUDGET, APPROVAL, PAYMENT, REPAIR, DONE]
+        failed_step: { type: string, nullable: true }
+        reason: { type: string, nullable: true }
+        deadline_at: { type: string, format: date-time, nullable: true }
+        pending_compensations:
           type: array
-          items:
-            $ref: '#/components/schemas/ServiceItem'
-        parts:
+          items: { type: string, example: billing.cancel-budget }
+        history:
           type: array
           items:
             type: object
             properties:
-              id:
-                type: string
-                format: uuid
-              description:
-                type: string
-              price:
-                type: number
-              stock_quantity:
-                type: integer
-              quantity:
-                type: integer
-        total_amount:
-          type: number
-          format: float
-          example: 285.80
-        created_at:
-          type: string
-          format: date-time
+              at: { type: string, format: date-time }
+              event: { type: string, example: step.entered }
+              step: { type: string }
+              detail: { type: string, nullable: true }
 
 security:
   - BearerAuth: []
@@ -816,267 +783,6 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  # ── Peças ─────────────────────────────────────────────────────────────────────
-  /parts:
-    get:
-      tags: [Peças]
-      summary: Listar peças do catálogo
-      responses:
-        '200':
-          description: Lista de peças
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Part'
-    post:
-      tags: [Peças]
-      summary: Cadastrar peça
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [description, price]
-              properties:
-                description:
-                  type: string
-                  example: Filtro de óleo
-                price:
-                  type: number
-                  example: 45.90
-                stock_quantity:
-                  type: integer
-                  default: 0
-                  example: 50
-            example:
-              description: Filtro de óleo
-              price: 45.90
-              stock_quantity: 50
-      responses:
-        '201':
-          description: Peça criada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Part'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /parts/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    get:
-      tags: [Peças]
-      summary: Buscar peça por ID
-      responses:
-        '200':
-          description: Peça encontrada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Part'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    put:
-      tags: [Peças]
-      summary: Atualizar dados da peça (descrição e preço)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [description, price]
-              properties:
-                description:
-                  type: string
-                  example: Filtro de óleo premium
-                price:
-                  type: number
-                  example: 52.00
-      responses:
-        '200':
-          description: Peça atualizada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Part'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    delete:
-      tags: [Peças]
-      summary: Remover peça
-      responses:
-        '204':
-          description: Peça removida
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /parts/{id}/stock:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    patch:
-      tags: [Peças]
-      summary: Repor estoque de peça (adiciona quantidade ao estoque atual)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [quantity]
-              properties:
-                quantity:
-                  type: integer
-                  minimum: 1
-                  example: 20
-      responses:
-        '200':
-          description: Estoque atualizado
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Part'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  # ── Serviços ──────────────────────────────────────────────────────────────────
-  /service-items/metrics:
-    get:
-      tags: [Serviços]
-      summary: Métricas de uso dos serviços (tempo estimado e quantidade de ordens)
-      responses:
-        '200':
-          description: Métricas por serviço
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ServiceItemMetric'
-
-  /service-items:
-    get:
-      tags: [Serviços]
-      summary: Listar catálogo de serviços
-      responses:
-        '200':
-          description: Lista de serviços
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ServiceItem'
-    post:
-      tags: [Serviços]
-      summary: Cadastrar serviço no catálogo
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [description, base_price]
-              properties:
-                description:
-                  type: string
-                  example: Troca de óleo
-                base_price:
-                  type: number
-                  example: 150.00
-                estimated_time_minutes:
-                  type: integer
-                  default: 0
-                  example: 60
-            example:
-              description: Troca de óleo
-              base_price: 150.00
-              estimated_time_minutes: 60
-      responses:
-        '201':
-          description: Serviço criado
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceItem'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /service-items/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    get:
-      tags: [Serviços]
-      summary: Buscar serviço por ID
-      responses:
-        '200':
-          description: Serviço encontrado
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceItem'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    put:
-      tags: [Serviços]
-      summary: Atualizar serviço
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [description, base_price]
-              properties:
-                description:
-                  type: string
-                  example: Troca de óleo sintético
-                base_price:
-                  type: number
-                  example: 180.00
-                estimated_time_minutes:
-                  type: integer
-                  example: 75
-      responses:
-        '200':
-          description: Serviço atualizado
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceItem'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    delete:
-      tags: [Serviços]
-      summary: Remover serviço do catálogo
-      responses:
-        '204':
-          description: Serviço removido
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   # ── Ordens de Serviço ─────────────────────────────────────────────────────────
   /service-orders:
     get:
@@ -1084,9 +790,9 @@ paths:
       summary: Listar ordens de serviço ativas
       description: |
         Retorna as ordens **ativas** ordenadas por prioridade de fluxo
-        (`EXECUTING` > `AWAITING_APPROVAL` > `DIAGNOSIS` > `RECEIVED`) e, dentro de
-        cada status, das mais antigas para as mais recentes. Ordens `FINISHED` e
-        `DELIVERED` são excluídas da listagem (exclusão lógica, não física).
+        (`EXECUTING` > `AWAITING_PAYMENT` > `AWAITING_APPROVAL` > `DIAGNOSIS` > `RECEIVED`) e,
+        dentro de cada status, das mais antigas para as mais recentes. Ordens encerradas
+        (`FINISHED`, `DELIVERED`, `REJECTED`, `CANCELLED`) são excluídas da listagem.
       responses:
         '200':
           description: Lista de ordens ativas ordenadas
@@ -1098,7 +804,10 @@ paths:
                   $ref: '#/components/schemas/ServiceOrder'
     post:
       tags: [Ordens de Serviço]
-      summary: Criar nova ordem de serviço (status inicial RECEIVED)
+      summary: Abrir ordem de serviço e iniciar a saga
+      description: |
+        Grava a OS (`RECEIVED`) e a saga dela na mesma transação, com o pedido de diagnóstico
+        para a Execução na outbox. A resposta já traz a saga no passo `DIAGNOSIS`.
       requestBody:
         required: true
         content:
@@ -1113,9 +822,13 @@ paths:
                 vehicle_id:
                   type: string
                   format: uuid
+                description:
+                  type: string
+                  description: O que o cliente relatou; vai no pedido de diagnóstico
             example:
               customer_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
               vehicle_id: 8b1e4d07-1234-4000-a000-000000000001
+              description: Barulho no freio dianteiro
       responses:
         '201':
           description: Ordem criada com status RECEIVED
@@ -1186,191 +899,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-
-  /service-orders/{id}/items:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
+  /service-orders/{id}/delivery:
     post:
       tags: [Ordens de Serviço]
-      summary: Adicionar serviços e peças à ordem
+      summary: Entregar o veículo (FINISHED → DELIVERED)
       description: |
-        Adiciona serviços e peças a uma ordem de serviço existente.
-        A adição de peças valida o estoque disponível e decrementa atomicamente
-        dentro de uma transação de banco de dados.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                service_item_ids:
-                  type: array
-                  items:
-                    type: string
-                    format: uuid
-                  example: ["svc-uuid-1", "svc-uuid-2"]
-                parts:
-                  type: array
-                  items:
-                    type: object
-                    required: [part_id, quantity]
-                    properties:
-                      part_id:
-                        type: string
-                        format: uuid
-                      quantity:
-                        type: integer
-                        minimum: 1
-            example:
-              service_item_ids: ["3fa85f64-5717-4562-b3fc-2c963f66afa6"]
-              parts:
-                - part_id: "8b1e4d07-0000-4000-a000-000000000001"
-                  quantity: 2
-      responses:
-        '200':
-          description: Itens adicionados com sucesso
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceOrder'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          description: Estoque insuficiente ou regra de negócio violada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /service-orders/{id}/status:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    patch:
-      tags: [Ordens de Serviço]
-      summary: Alterar status da ordem de serviço
-      description: |
-        **Transições válidas (máquina de estados):**
-
-        ```
-        RECEIVED → DIAGNOSIS → AWAITING_APPROVAL → EXECUTING → FINISHED → DELIVERED
-        ```
-
-        - `DIAGNOSIS`: inicia o diagnóstico do veículo
-        - `AWAITING_APPROVAL`: envia orçamento para aprovação (calcula total)
-        - `EXECUTING`: aprova o orçamento e inicia execução
-        - `FINISHED`: finaliza a execução dos serviços
-        - `DELIVERED`: entrega o veículo ao cliente
-
-        Cada mudança de status dispara uma notificação por email quando o SMTP
-        está configurado (`SMTP_HOST`/`MAIL_TO`).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [status]
-              properties:
-                status:
-                  $ref: '#/components/schemas/OrderStatus'
-            example:
-              status: DIAGNOSIS
-      responses:
-        '200':
-          description: Status alterado com sucesso
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceOrder'
-        '400':
-          description: Status inválido
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          description: Transição de status inválida
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /service-orders/{id}/approval:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      tags: [Ordens de Serviço]
-      summary: Aprovar ou recusar o orçamento (notificação externa)
-      description: |
-        Endpoint para um canal externo notificar a decisão do cliente sobre o
-        orçamento de uma ordem em `AWAITING_APPROVAL`:
-
-        - `approved: true` → aprova e move a ordem para `EXECUTING`
-        - `approved: false` → recusa e move a ordem para `REJECTED`
-
-        Protegido por token compartilhado: o header `X-Webhook-Token` é **sempre obrigatório**
-        e precisa bater com o segredo `WEBHOOK_TOKEN`. Se o segredo não estiver configurado no
-        ambiente, a rota responde `401` — nunca fica aberta.
-      security: []
+        A entrega é manual e fica fora da saga. Só depois de o reparo terminar (`FINISHED`).
       parameters:
-        - name: X-Webhook-Token
-          in: header
+        - name: id
+          in: path
           required: true
-          schema:
-            type: string
-          description: Token compartilhado do webhook (obrigatório)
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Ordem entregue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceOrder'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /service-orders/{id}/cancellation:
+    post:
+      tags: [Ordens de Serviço]
+      summary: Cancelar a ordem de serviço
+      description: |
+        Cancela a OS e inicia a compensação do que a saga já fez (docs/fase-4/CONTRATOS.md §6.2):
+        no diagnóstico, cancela a tarefa na Execução; com orçamento, cancela o orçamento (e
+        libera as peças); em reparo, também estorna o pagamento. A OS vai para `CANCELLED` na
+        hora; a saga fica em `COMPENSATING` até as confirmações chegarem. Recusado depois de
+        `FINISHED`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [approved]
+              required: [reason]
               properties:
-                approved:
-                  type: boolean
-                  description: "true aprova (→ EXECUTING); false recusa (→ REJECTED)"
-            example:
-              approved: true
+                reason:
+                  type: string
+                  example: cliente desistiu do serviço
       responses:
         '200':
-          description: Decisão aplicada com sucesso
+          description: Ordem cancelada, compensação em andamento
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServiceOrder'
-        '400':
-          description: Campo "approved" ausente ou inválido
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Token de webhook ausente, inválido ou não configurado no ambiente
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: A ordem mudou enquanto a operação corria; tente de novo
         '422':
-          description: Ordem não está em AWAITING_APPROVAL
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/UnprocessableEntity'

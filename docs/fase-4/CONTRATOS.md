@@ -51,8 +51,8 @@ O ECR do OS continua no `oficina-infra-cluster`, como na Fase 3.
 
 > **Adendo F4-2 (`infra/` nos repos de serviço).** A seção 8 da Fase 3 removeu `infra/` do
 > `oficina-api`. Ele volta, com outro conteúdo: só os recursos do próprio serviço (fila, DLQ,
-> assinatura, role IRSA). State em `oficina/oficina-api/<env>/terraform.tfstate`, no mesmo
-> bucket. O role de CI do repo ganha as permissões desse Terraform no `bootstrap/aws/`.
+> assinatura, role IRSA). State em `oficina/oficina-mecanica-tech-challenge/<env>/terraform.tfstate`
+> (o nome antigo do repo, como a tag `Repo` e o role de CI), no mesmo bucket. O role de CI do repo ganha as permissões desse Terraform no `bootstrap/aws/`.
 
 Ordem de `apply`: **fundação → cluster → gateway → `infra/` de cada serviço → deploy de cada
 serviço**. Os três serviços não dependem uns dos outros para subir. `destroy`: inversa.

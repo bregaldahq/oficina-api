@@ -5,33 +5,50 @@ declare(strict_types=1);
 namespace App\Domain\Aggregate;
 
 use App\Domain\Entity\Customer;
-use App\Domain\Entity\Part;
-use App\Domain\Entity\ServiceItem;
 use App\Domain\Entity\Vehicle;
 use App\Domain\Event\DomainEventInterface;
 use App\Domain\Event\ServiceOrderCreatedEvent;
 use App\Domain\Event\ServiceOrderStatusChangedEvent;
 use App\Domain\Exception\InvalidStatusTransitionException;
 
+/**
+ * A ordem de serviço e a máquina de estados dela (ADR-003): cada transição é um método nomeado,
+ * nunca um setStatus. Na Fase 4 quem move a OS é a saga (docs/fase-4/CONTRATOS.md §6.4, no
+ * oficina-api); itens e preços ficam no serviço de Faturamento, e aqui chegam só o id do
+ * orçamento, o total e o link de pagamento.
+ *
+ *   RECEIVED → DIAGNOSIS → AWAITING_APPROVAL → AWAITING_PAYMENT → EXECUTING → FINISHED → DELIVERED
+ *                                 └→ REJECTED
+ *   RECEIVED, DIAGNOSIS, AWAITING_APPROVAL, AWAITING_PAYMENT, EXECUTING → CANCELLED
+ */
 class ServiceOrder
 {
-    private const STATUS_RECEIVED          = 'RECEIVED';
-    private const STATUS_DIAGNOSIS         = 'DIAGNOSIS';
-    private const STATUS_AWAITING_APPROVAL = 'AWAITING_APPROVAL';
-    private const STATUS_EXECUTING         = 'EXECUTING';
-    private const STATUS_REJECTED          = 'REJECTED';
-    private const STATUS_FINISHED          = 'FINISHED';
-    private const STATUS_DELIVERED         = 'DELIVERED';
+    public const STATUS_RECEIVED          = 'RECEIVED';
+    public const STATUS_DIAGNOSIS         = 'DIAGNOSIS';
+    public const STATUS_AWAITING_APPROVAL = 'AWAITING_APPROVAL';
+    public const STATUS_AWAITING_PAYMENT  = 'AWAITING_PAYMENT';
+    public const STATUS_EXECUTING         = 'EXECUTING';
+    public const STATUS_REJECTED          = 'REJECTED';
+    public const STATUS_FINISHED          = 'FINISHED';
+    public const STATUS_DELIVERED         = 'DELIVERED';
+    public const STATUS_CANCELLED         = 'CANCELLED';
 
-    /** @var ServiceItem[] */
-    private array $services = [];
-
-    /** @var array<array{part: Part, quantity: int}> */
-    private array $partsWithQuantity = [];
+    /** De onde ainda dá para cancelar: tudo antes de o reparo terminar. */
+    private const CANCELLABLE = [
+        self::STATUS_RECEIVED,
+        self::STATUS_DIAGNOSIS,
+        self::STATUS_AWAITING_APPROVAL,
+        self::STATUS_AWAITING_PAYMENT,
+        self::STATUS_EXECUTING,
+    ];
 
     private float $totalAmount = 0.00;
 
-    /** @var DomainEventInterface[] */
+    private ?string $budgetId = null;
+
+    private ?string $paymentUrl = null;
+
+    /** @var list<DomainEventInterface> */
     private array $domainEvents = [];
 
     private bool $isNew = false;
@@ -50,16 +67,11 @@ class ServiceOrder
         $order        = new self($id, $customer, $vehicle, self::STATUS_RECEIVED, new \DateTimeImmutable());
         $order->isNew = true;
         $order->recordEvent(new ServiceOrderCreatedEvent($id, $customer->getId(), $vehicle->getId()));
+
         return $order;
     }
 
-    /**
-     * Reconstitui a OS a partir de dados persistidos.
-     * Usado exclusivamente pela camada de infraestrutura — não dispara eventos de domínio.
-     *
-     * @param ServiceItem[]                           $services
-     * @param array<array{part: Part, quantity: int}> $partsWithQuantity
-     */
+    /** Hidratação a partir do banco (ADR-005): não valida transição nem gera evento. */
     public static function reconstitute(
         string $id,
         Customer $customer,
@@ -67,13 +79,14 @@ class ServiceOrder
         string $status,
         float $totalAmount,
         \DateTimeImmutable $createdAt,
-        array $services = [],
-        array $partsWithQuantity = [],
+        ?string $budgetId = null,
+        ?string $paymentUrl = null,
     ): self {
-        $order                    = new self($id, $customer, $vehicle, $status, $createdAt);
-        $order->totalAmount       = $totalAmount;
-        $order->services          = $services;
-        $order->partsWithQuantity = $partsWithQuantity;
+        $order              = new self($id, $customer, $vehicle, $status, $createdAt);
+        $order->totalAmount = $totalAmount;
+        $order->budgetId    = $budgetId;
+        $order->paymentUrl  = $paymentUrl;
+
         return $order;
     }
 
@@ -102,6 +115,16 @@ class ServiceOrder
         return $this->totalAmount;
     }
 
+    public function getBudgetId(): ?string
+    {
+        return $this->budgetId;
+    }
+
+    public function getPaymentUrl(): ?string
+    {
+        return $this->paymentUrl;
+    }
+
     public function getCreatedAt(): \DateTimeImmutable
     {
         return $this->createdAt;
@@ -112,120 +135,107 @@ class ServiceOrder
         return $this->isNew;
     }
 
-    /** @return ServiceItem[] */
-    public function getServices(): array
+    public function isCancellable(): bool
     {
-        return $this->services;
+        return in_array($this->status, self::CANCELLABLE, true);
     }
 
-    /** @return array<array{part: Part, quantity: int}> */
-    public function getPartsWithQuantity(): array
-    {
-        return $this->partsWithQuantity;
-    }
-
-    /** @return DomainEventInterface[] */
+    /** @return list<DomainEventInterface> */
     public function releaseEvents(): array
     {
         $events             = $this->domainEvents;
         $this->domainEvents = [];
+
         return $events;
     }
 
-    public function addService(ServiceItem $service): void
-    {
-        $this->services[]  = $service;
-        $this->totalAmount = $this->calculateTotalAmount();
-    }
-
-    /**
-     * Adiciona uma peça à OS e decrementa o estoque em memória.
-     * O decremento no banco ocorre dentro da transação do repositório.
-     */
-    public function addPart(Part $part, int $quantity): void
-    {
-        $part->decreaseStock($quantity);
-        $this->partsWithQuantity[] = ['part' => $part, 'quantity' => $quantity];
-        $this->totalAmount         = $this->calculateTotalAmount();
-    }
-
-    public function calculateTotalAmount(): float
-    {
-        $servicesTotal = array_sum(array_map(fn (ServiceItem $s) => $s->getBasePrice(), $this->services));
-
-        $partsTotal = array_sum(
-            array_map(fn (array $p) => $p['part']->getPrice() * $p['quantity'], $this->partsWithQuantity)
-        );
-
-        return round($servicesTotal + $partsTotal, 2);
-    }
-
+    /** O mecânico começou o diagnóstico (evento diagnosis.started da Execução). */
     public function changeToDiagnosis(): void
     {
-        $this->requireStatus(self::STATUS_RECEIVED, self::STATUS_DIAGNOSIS);
-        $this->status = self::STATUS_DIAGNOSIS;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_RECEIVED, self::STATUS_DIAGNOSIS, $this->totalAmount));
+        $this->transition([self::STATUS_RECEIVED], self::STATUS_DIAGNOSIS);
     }
 
-    public function sendForApproval(): void
+    /** O Faturamento gerou o orçamento: o total vem dele, já com o preço do catálogo. */
+    public function sendForApproval(string $budgetId, float $totalAmount): void
     {
-        $this->requireStatus(self::STATUS_DIAGNOSIS, self::STATUS_AWAITING_APPROVAL);
-        $this->totalAmount = $this->calculateTotalAmount();
-        $this->status      = self::STATUS_AWAITING_APPROVAL;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_DIAGNOSIS, self::STATUS_AWAITING_APPROVAL, $this->totalAmount));
+        $this->requireStatus([self::STATUS_DIAGNOSIS], self::STATUS_AWAITING_APPROVAL);
+        $this->budgetId    = $budgetId;
+        $this->totalAmount = round($totalAmount, 2);
+        $this->transition([self::STATUS_DIAGNOSIS], self::STATUS_AWAITING_APPROVAL);
     }
 
+    /** O cliente aprovou: agora a OS espera o pagamento (Fase 4), não vai direto para a execução. */
     public function approve(): void
     {
-        $this->requireStatus(self::STATUS_AWAITING_APPROVAL, self::STATUS_EXECUTING);
-        $this->status = self::STATUS_EXECUTING;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_AWAITING_APPROVAL, self::STATUS_EXECUTING, $this->totalAmount));
+        $this->transition([self::STATUS_AWAITING_APPROVAL], self::STATUS_AWAITING_PAYMENT);
     }
 
     public function reject(): void
     {
-        $this->requireStatus(self::STATUS_AWAITING_APPROVAL, self::STATUS_REJECTED);
-        $this->status = self::STATUS_REJECTED;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_AWAITING_APPROVAL, self::STATUS_REJECTED, $this->totalAmount));
+        $this->transition([self::STATUS_AWAITING_APPROVAL], self::STATUS_REJECTED);
+    }
+
+    /** O link de pagamento que o cliente abre. Só faz sentido esperando o pagamento. */
+    public function recordPaymentLink(string $paymentUrl): void
+    {
+        $this->requireStatus([self::STATUS_AWAITING_PAYMENT], self::STATUS_AWAITING_PAYMENT);
+        $this->paymentUrl = $paymentUrl;
+    }
+
+    /** O pagamento foi confirmado: o reparo pode começar. O link deixa de valer. */
+    public function startExecution(): void
+    {
+        $this->transition([self::STATUS_AWAITING_PAYMENT], self::STATUS_EXECUTING);
+        $this->paymentUrl = null;
     }
 
     public function finish(): void
     {
-        $this->requireStatus(self::STATUS_EXECUTING, self::STATUS_FINISHED);
-        $this->status = self::STATUS_FINISHED;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_EXECUTING, self::STATUS_FINISHED, $this->totalAmount));
+        $this->transition([self::STATUS_EXECUTING], self::STATUS_FINISHED);
     }
 
     public function deliver(): void
     {
-        $this->requireStatus(self::STATUS_FINISHED, self::STATUS_DELIVERED);
-        $this->status = self::STATUS_DELIVERED;
-        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, self::STATUS_FINISHED, self::STATUS_DELIVERED, $this->totalAmount));
+        $this->transition([self::STATUS_FINISHED], self::STATUS_DELIVERED);
+    }
+
+    /** Compensação da saga ou cancelamento pelo admin. Depois de terminado o reparo, não cabe mais. */
+    public function cancel(): void
+    {
+        $this->transition(self::CANCELLABLE, self::STATUS_CANCELLED);
+        $this->paymentUrl = null;
     }
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
         return [
-            'id'       => $this->id,
-            'customer' => $this->customer->toArray(),
-            'vehicle'  => $this->vehicle->toArray(),
-            'status'   => $this->status,
-            'services' => array_map(fn (ServiceItem $s) => $s->toArray(), $this->services),
-            'parts'    => array_map(fn (array $p) => array_merge(
-                $p['part']->toArray(),
-                ['quantity' => $p['quantity']]
-            ), $this->partsWithQuantity),
+            'id'           => $this->id,
+            'customer'     => $this->customer->toArray(),
+            'vehicle'      => $this->vehicle->toArray(),
+            'status'       => $this->status,
             'total_amount' => $this->totalAmount,
+            'budget_id'    => $this->budgetId,
+            'payment_url'  => $this->paymentUrl,
             'created_at'   => $this->createdAt->format('Y-m-d H:i:s'),
         ];
     }
 
-    private function requireStatus(string $required, string $target): void
+    /** @param list<string> $from */
+    private function transition(array $from, string $to): void
     {
-        if ($this->status !== $required) {
+        $this->requireStatus($from, $to);
+        $previous     = $this->status;
+        $this->status = $to;
+        $this->recordEvent(new ServiceOrderStatusChangedEvent($this->id, $previous, $to, $this->totalAmount));
+    }
+
+    /** @param list<string> $required */
+    private function requireStatus(array $required, string $target): void
+    {
+        if (!in_array($this->status, $required, true)) {
             throw new InvalidStatusTransitionException(
-                "Transição inválida de '{$this->status}' para '{$target}'. Status requerido: '{$required}'."
+                "Transição inválida de '{$this->status}' para '{$target}'. Status requerido: '" . implode("' ou '", $required) . "'."
             );
         }
     }

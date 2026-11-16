@@ -36,11 +36,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configurar PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo, pdo_sqlite, pdo_mysql, mbstring
+          coverage: pcov
+          tools: composer:v2
+
+      - name: Testes, cobertura mínima e BDD (o deploy não segue sem isso)
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          vendor/bin/phpunit --coverage-clover coverage.xml
+          php bin/check-coverage.php coverage.xml 80
+          vendor/bin/behat --no-colors
+
       - name: Autenticar na AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      # Fase 4 (docs/fase-4/CONTRATOS.md, adendo F4-2): fila, DLQ, assinatura e role IRSA da saga.
+      # A chave do state usa o nome antigo do repo, como os roles de CI e a tag Repo.
+      - name: Infra do serviço (terraform apply)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=oficina/oficina-mecanica-tech-challenge/${ENVIRONMENT}/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -backend-config="dynamodb_table=oficina-tflock" \
+            -backend-config="encrypt=true"
+          terraform apply -auto-approve -input=false -var-file="envs/${ENVIRONMENT}.tfvars"
 
       # ── Descoberta por SSM (nenhum terraform_remote_state entre repos) ─────
       - name: Ler parâmetros do SSM
@@ -52,11 +86,17 @@ jobs:
           CLUSTER=$(get  "/oficina/${ENVIRONMENT}/eks/cluster_name")
           TG_ARN=$(get   "/oficina/${ENVIRONMENT}/nlb/target_group_arn")
           NAMESPACE=$(get "/oficina/${ENVIRONMENT}/eks/namespace")
+          QUEUE_URL=$(get "/oficina/${ENVIRONMENT}/os/queue_url")
+          IRSA_ROLE=$(get "/oficina/${ENVIRONMENT}/os/irsa_role_arn")
+          TOPIC_ARN=$(get "/oficina/${ENVIRONMENT}/messaging/topic_arn")
           {
             echo "ecr_url=$ECR_URL"
             echo "cluster_name=$CLUSTER"
             echo "target_group_arn=$TG_ARN"
             echo "namespace=$NAMESPACE"
+            echo "queue_url=$QUEUE_URL"
+            echo "irsa_role_arn=$IRSA_ROLE"
+            echo "topic_arn=$TOPIC_ARN"
           } >> "$GITHUB_OUTPUT"
 
       - name: Login no ECR
@@ -116,6 +156,11 @@ jobs:
           # Contratos): o NLB e o TG são do repo oficina-infra-cluster.
           sed -i "s#TARGET_GROUP_ARN_PLACEHOLDER#${{ steps.ssm.outputs.target_group_arn }}#" \
             deploy/base/targetgroupbinding.yaml
+          sed -i "s#IRSA_ROLE_ARN_PLACEHOLDER#${{ steps.ssm.outputs.irsa_role_arn }}#" \
+            deploy/base/serviceaccount.yaml
+          (cd "$OVERLAY" && kustomize edit add configmap oficina-config --behavior=merge \
+            --from-literal=MESSAGING_TOPIC_ARN="${{ steps.ssm.outputs.topic_arn }}" \
+            --from-literal=MESSAGING_QUEUE_URL="${{ steps.ssm.outputs.queue_url }}")
           # O Job de migration e aplicado fora do kustomize (Jobs sao imutaveis, um
           # apply -k repetido falharia), entao a imagem precisa ser fixada aqui tambem.
           sed -i "s#APP_IMAGE_PLACEHOLDER#${{ steps.ssm.outputs.ecr_url }}:${{ github.sha }}#" \
@@ -167,19 +212,23 @@ jobs:
       - name: Propagar mudanca da license key para os pods
         run: |
           set -euo pipefail
-          kubectl -n "${{ steps.ssm.outputs.namespace }}" patch deployment oficina-api \
-            -p '{"spec":{"template":{"metadata":{"annotations":{"oficina/newrelic-key-hash":"${{ steps.nrsecret.outputs.keyhash }}"}}}}}'
+          for deploy in oficina-api oficina-api-worker; do
+            kubectl -n "${{ steps.ssm.outputs.namespace }}" patch deployment "$deploy" \
+              -p '{"spec":{"template":{"metadata":{"annotations":{"oficina/newrelic-key-hash":"${{ steps.nrsecret.outputs.keyhash }}"}}}}}'
+          done
 
       - name: Aguardar rollout
         env:
           NS: ${{ steps.ssm.outputs.namespace }}
         run: |
           set -euo pipefail
-          if ! kubectl -n "$NS" rollout status deployment/oficina-api --timeout=600s; then
-            kubectl -n "$NS" describe deployment/oficina-api || true
-            kubectl -n "$NS" logs -l app=oficina-api --all-containers --tail=200 || true
-            exit 1
-          fi
+          for deploy in oficina-api oficina-api-worker; do
+            if ! kubectl -n "$NS" rollout status "deployment/${deploy}" --timeout=600s; then
+              kubectl -n "$NS" describe "deployment/${deploy}" || true
+              kubectl -n "$NS" logs -l "app=${deploy}" --all-containers --tail=200 || true
+              exit 1
+            fi
+          done
 
       # ── Smoke test ────────────────────────────────────────────────────────
       - name: Smoke test em /api/ready

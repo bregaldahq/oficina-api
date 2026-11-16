@@ -6,116 +6,215 @@ namespace Tests\Unit\Domain\ServiceOrder;
 
 use App\Domain\Aggregate\ServiceOrder;
 use App\Domain\Entity\Customer;
-use App\Domain\Entity\Part;
-use App\Domain\Entity\ServiceItem;
 use App\Domain\Entity\Vehicle;
+use App\Domain\Event\ServiceOrderCreatedEvent;
+use App\Domain\Event\ServiceOrderStatusChangedEvent;
+use App\Domain\Exception\InvalidDocumentException;
 use App\Domain\Exception\InvalidStatusTransitionException;
 use App\Domain\ValueObject\Document;
 use App\Domain\ValueObject\LicensePlate;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+/** A máquina de estados da OS na Fase 4 (docs/fase-4/CONTRATOS.md §6.4, no oficina-api). */
 class ServiceOrderTest extends TestCase
 {
-    private Customer $customer;
-    private Vehicle $vehicle;
-
-    protected function setUp(): void
+    private function order(): ServiceOrder
     {
-        $this->customer = Customer::create('cust-001', 'João Silva', new Document('529.982.247-25'));
-        $this->vehicle  = Vehicle::create('veh-001', 'cust-001', new LicensePlate('ABC-1234'), 'Toyota', 'Corolla', 2020);
+        return ServiceOrder::create(
+            'os-1',
+            Customer::create('cust-1', 'João Silva', new Document('529.982.247-25')),
+            Vehicle::create('veh-1', 'cust-1', new LicensePlate('ABC-1234'), 'Toyota', 'Corolla', 2020),
+        );
     }
 
-    public function testNewOrderStartsWithReceivedStatus(): void
+    /** @return list<string> "DE→PARA" de cada evento de mudança de status */
+    private function transitions(ServiceOrder $order): array
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $this->assertSame('RECEIVED', $order->getStatus());
+        $out = [];
+        foreach ($order->releaseEvents() as $event) {
+            if ($event instanceof ServiceOrderStatusChangedEvent) {
+                $out[] = $event->previousStatus . "→" . $event->newStatus;
+            }
+        }
+
+        return $out;
     }
 
-    public function testChangeToDiagnosis(): void
+    private function awaitingPayment(): ServiceOrder
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
+        $order = $this->order();
         $order->changeToDiagnosis();
-        $this->assertSame('DIAGNOSIS', $order->getStatus());
-    }
-
-    public function testValidFullFlow(): void
-    {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $order->changeToDiagnosis();
-        $order->sendForApproval();
+        $order->sendForApproval('budget-1', 558.0);
         $order->approve();
+
+        return $order;
+    }
+
+    public function testNasceRecebidaEAvisaACriacao(): void
+    {
+        $order = $this->order();
+
+        $this->assertSame('RECEIVED', $order->getStatus());
+        $this->assertTrue($order->isNew());
+        $this->assertInstanceOf(ServiceOrderCreatedEvent::class, $order->releaseEvents()[0]);
+    }
+
+    public function testCaminhoFelizDaSaga(): void
+    {
+        $order = $this->order();
+        $order->releaseEvents();
+
+        $order->changeToDiagnosis();
+        $order->sendForApproval('budget-1', 558.004);
+        $order->approve();
+        $order->recordPaymentLink('https://pagar');
+        $this->assertSame('https://pagar', $order->getPaymentUrl());
+        $order->startExecution();
         $order->finish();
         $order->deliver();
 
-        $this->assertSame('DELIVERED', $order->getStatus());
+        $this->assertSame([
+            'RECEIVED→DIAGNOSIS',
+            'DIAGNOSIS→AWAITING_APPROVAL',
+            'AWAITING_APPROVAL→AWAITING_PAYMENT',
+            'AWAITING_PAYMENT→EXECUTING',
+            'EXECUTING→FINISHED',
+            'FINISHED→DELIVERED',
+        ], $this->transitions($order));
+        $this->assertSame('budget-1', $order->getBudgetId());
+        $this->assertSame(558.0, $order->getTotalAmount(), 'o total vem do orçamento, arredondado');
+        $this->assertNull($order->getPaymentUrl(), 'pago: o link deixa de valer');
     }
 
-    public function testInvalidTransitionThrows(): void
+    public function testRecusaDoOrcamento(): void
     {
-        $this->expectException(InvalidStatusTransitionException::class);
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $order->approve(); // requires AWAITING_APPROVAL
-    }
-
-    public function testRejectFromAwaitingApprovalSetsRejectedStatus(): void
-    {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
+        $order = $this->order();
         $order->changeToDiagnosis();
-        $order->sendForApproval();
+        $order->sendForApproval('budget-1', 10.0);
+        $order->releaseEvents();
+
         $order->reject();
 
-        $this->assertSame('REJECTED', $order->getStatus());
+        $this->assertSame(['AWAITING_APPROVAL→REJECTED'], $this->transitions($order));
+        $this->assertFalse($order->isCancellable());
     }
 
-    public function testRejectRequiresAwaitingApproval(): void
+    /** @return array<string, array{0: callable(ServiceOrder): void}> */
+    public static function cancelaveis(): array
     {
+        return [
+            'recebida'             => [fn (ServiceOrder $o) => null],
+            'em diagnóstico'       => [fn (ServiceOrder $o) => $o->changeToDiagnosis()],
+            'aguardando aprovação' => [function (ServiceOrder $o): void {
+                $o->changeToDiagnosis();
+                $o->sendForApproval('b', 1);
+            }],
+            'aguardando pagamento' => [function (ServiceOrder $o): void {
+                $o->changeToDiagnosis();
+                $o->sendForApproval('b', 1);
+                $o->approve();
+                $o->recordPaymentLink('https://pagar');
+            }],
+            'em execução' => [function (ServiceOrder $o): void {
+                $o->changeToDiagnosis();
+                $o->sendForApproval('b', 1);
+                $o->approve();
+                $o->startExecution();
+            }],
+        ];
+    }
+
+    /** @param callable(ServiceOrder): void $setup */
+    #[DataProvider('cancelaveis')]
+    public function testCancelaAteOFimDoReparo(callable $setup): void
+    {
+        $order = $this->order();
+        $setup($order);
+        $this->assertTrue($order->isCancellable());
+
+        $order->cancel();
+
+        $this->assertSame('CANCELLED', $order->getStatus());
+        $this->assertNull($order->getPaymentUrl());
+        $this->assertFalse($order->isCancellable());
+    }
+
+    public function testNaoCancelaDepoisDeTerminado(): void
+    {
+        $order = $this->awaitingPayment();
+        $order->startExecution();
+        $order->finish();
+
         $this->expectException(InvalidStatusTransitionException::class);
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $order->reject(); // from RECEIVED
+        $order->cancel();
     }
 
-    public function testSendForApprovalCalculatesAndStoresTotal(): void
+    /** @return array<string, array{0: callable(ServiceOrder): void}> */
+    public static function foraDeHora(): array
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $order->addService(ServiceItem::create('svc-1', 'Troca de óleo', 150.00, 60));
-        $order->addPart(Part::create('p-1', 'Filtro', 45.00, 10), 2);
-
-        $order->changeToDiagnosis();
-        $order->sendForApproval();
-
-        $this->assertSame(240.00, $order->getTotalAmount()); // 150 + 2*45
+        return [
+            'orçamento antes do diagnóstico' => [fn (ServiceOrder $o) => $o->sendForApproval('b', 1)],
+            'aprovar sem orçamento'          => [fn (ServiceOrder $o) => $o->approve()],
+            'link sem aprovação'             => [fn (ServiceOrder $o) => $o->recordPaymentLink('x')],
+            'executar sem pagar'             => [fn (ServiceOrder $o) => $o->startExecution()],
+            'terminar sem executar'          => [fn (ServiceOrder $o) => $o->finish()],
+            'entregar sem terminar'          => [fn (ServiceOrder $o) => $o->deliver()],
+            'recusar sem orçamento'          => [fn (ServiceOrder $o) => $o->reject()],
+        ];
     }
 
-    public function testCalculatesTotalWithServicesAndParts(): void
+    /** @param callable(ServiceOrder): void $action */
+    #[DataProvider('foraDeHora')]
+    public function testTransicaoInvalidaENegadaSemMudarNada(callable $action): void
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $order->addService(ServiceItem::create('svc-1', 'Troca de óleo', 150.00, 60));
-        $order->addPart(Part::create('p-1', 'Filtro', 45.00, 10), 2);
+        $order = $this->order();
 
-        $this->assertSame(240.00, $order->calculateTotalAmount());
+        try {
+            $action($order);
+            $this->fail('esperava InvalidStatusTransitionException');
+        } catch (InvalidStatusTransitionException $e) {
+            $this->assertStringContainsString("'RECEIVED'", $e->getMessage());
+        }
+
+        $this->assertSame('RECEIVED', $order->getStatus());
+        $this->assertNull($order->getBudgetId());
     }
 
-    public function testTotalAmountStaysCurrentAsItemsAreAdded(): void
+    public function testExecutarDuasVezesENegado(): void
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $this->assertSame(0.00, $order->getTotalAmount());
+        $order = $this->awaitingPayment();
+        $order->startExecution();
 
-        $order->addService(ServiceItem::create('svc-1', 'Troca de óleo', 150.00, 60));
-        $this->assertSame(150.00, $order->getTotalAmount());
-
-        $order->addPart(Part::create('p-1', 'Filtro', 45.00, 10), 2);
-        $this->assertSame(240.00, $order->getTotalAmount()); // 150 + 2 * 45
+        $this->expectException(InvalidStatusTransitionException::class);
+        $order->startExecution();
     }
 
-    public function testToArrayContainsExpectedKeys(): void
+    public function testReconstituteNaoGeraEvento(): void
     {
-        $order = ServiceOrder::create('order-001', $this->customer, $this->vehicle);
-        $array = $order->toArray();
+        $order = ServiceOrder::reconstitute(
+            'os-9',
+            Customer::create('c', 'Ana', new Document('529.982.247-25')),
+            Vehicle::create('v', 'c', new LicensePlate('ABC-1234'), 'Fiat', 'Uno', 2010),
+            'AWAITING_PAYMENT',
+            300.5,
+            new \DateTimeImmutable('2026-11-16 10:00:00'),
+            'budget-2',
+            'https://pagar',
+        );
 
-        $this->assertArrayHasKey('id', $array);
-        $this->assertArrayHasKey('customer', $array);
-        $this->assertArrayHasKey('vehicle', $array);
-        $this->assertArrayHasKey('status', $array);
-        $this->assertArrayHasKey('total_amount', $array);
+        $this->assertSame([], $order->releaseEvents());
+        $this->assertFalse($order->isNew());
+        $this->assertSame([
+            'id', 'customer', 'vehicle', 'status', 'total_amount', 'budget_id', 'payment_url', 'created_at',
+        ], array_keys($order->toArray()));
+        $this->assertSame('https://pagar', $order->toArray()['payment_url']);
+    }
+
+    public function testDocumentoInvalidoFalhaNaCriacaoDoCliente(): void
+    {
+        $this->expectException(InvalidDocumentException::class);
+
+        new Document('111.111.111-11');
     }
 }

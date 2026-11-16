@@ -23,6 +23,8 @@ spec:
       # www-data é uid/gid 33 — no Alpine era 82. O fsGroup precisa acompanhar,
       # senão o emptyDir compartilhado não fica gravável e o initContainer de
       # cópia / a materialização do .env falham.
+      # Fase 4: a API publica no tópico logo depois de gravar (OutboxRelay), com o role IRSA.
+      serviceAccountName: oficina-api
       securityContext:
         runAsNonRoot: true
         runAsUser: 33

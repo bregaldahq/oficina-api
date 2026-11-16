@@ -11,7 +11,7 @@ namespace App\Infrastructure\Logging;
  * Field order is fixed (timestamp, level, message, service, env, then context) so log lines
  * stay diff-friendly and easy to eyeball in `kubectl logs`.
  */
-final class JsonLogger
+final class JsonLogger implements \App\Application\Port\LoggerInterface
 {
     public const LEVELS = ['debug', 'info', 'warn', 'error'];
 
