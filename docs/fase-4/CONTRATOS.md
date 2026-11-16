@@ -359,7 +359,9 @@ Aplicada a cada falha:
   saga fica em `FAILED`, com alerta: é o caso que pede uma pessoa. A OS continua `CANCELLED`, e
   a resposta da OS lista em `saga` as compensações pendentes.
 - Comando de compensação para algo que não existe (por exemplo, `billing.cancel-budget` para
-  uma saga sem orçamento) é respondido com o evento de confirmação, sem efeito.
+  uma saga sem orçamento) ou que já terminou (por exemplo, `execution.cancel` para uma tarefa
+  já encerrada, com falha ou reparada) é respondido com o evento de confirmação, sem efeito. A
+  confirmação diz "não há mais nada a desfazer aqui", não "foi desfeito".
 - Pagamento que chega depois do cancelamento é estornado pelo próprio Faturamento (§5.4).
 
 ### 6.3 Prazos
