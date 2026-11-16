@@ -15,6 +15,7 @@ use App\Application\UseCase\ServiceOrder\CreateServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\DeliverServiceOrderUseCase;
 use App\Application\Worker\Worker;
 use App\Domain\Event\EventDispatcherInterface;
+use App\Domain\Event\SagaEvent;
 use App\Domain\Event\ServiceOrderCreatedEvent;
 use App\Domain\Event\ServiceOrderStatusChangedEvent;
 use App\Domain\Saga\SagaOrchestrator;
@@ -90,6 +91,7 @@ final class ServiceFactory
         $dispatcher->subscribe(ServiceOrderCreatedEvent::class, static fn (ServiceOrderCreatedEvent $e) => $newRelic->onCreated($e));
         $dispatcher->subscribe(ServiceOrderStatusChangedEvent::class, static fn (ServiceOrderStatusChangedEvent $e) => $statusHistory->onStatusChanged($e));
         $dispatcher->subscribe(ServiceOrderStatusChangedEvent::class, static fn (ServiceOrderStatusChangedEvent $e) => $newRelic->onStatusChanged($e));
+        $dispatcher->subscribe(SagaEvent::class, static fn (SagaEvent $e) => $newRelic->onSaga($e));
 
         // E-mail só com SMTP configurado; sem ele, silêncio.
         if ($this->string('SMTP_HOST') !== '' && $this->string('MAIL_TO') !== '') {

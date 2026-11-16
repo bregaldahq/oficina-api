@@ -1,6 +1,9 @@
 # Oficina Mecânica API
 
 [![Deploy](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml)
+[![PR](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml/badge.svg?branch=develop)](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=bregaldahq_oficina-api&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=bregaldahq_oficina-api)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=bregaldahq_oficina-api&metric=coverage)](https://sonarcloud.io/component_measures?id=bregaldahq_oficina-api&metric=coverage)
 [![PHP](https://img.shields.io/badge/PHP-8.2-blue?logo=php)](https://php.net)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0-orange?logo=mysql)](https://mysql.com)
 [![PHPUnit](https://img.shields.io/badge/Tests-PHPUnit%2011-green)](https://phpunit.de)
@@ -85,12 +88,40 @@ Compensação sem confirmação é reenviada com espera crescente; esgotadas as 
 
 ### Qualidade
 
-- **Cobertura de 91,8% das linhas de todo o `src/`**, exigida (mínimo de 80%) no `pr.yml` e de
-  novo antes do deploy.
+- **233 testes, 92,0% das linhas de todo o `src/`** (medido em 2026-11-16), com mínimo de 80%
+  exigido no `pr.yml` e de novo antes do deploy.
 - **BDD da saga** em [`features/saga.feature`](features/saga.feature) (Behat): fluxo completo,
   reparo que falha e é estornado, orçamento recusado, prazo vencido, compensação que nunca
   confirma e evento repetido ou fora de hora.
-- PHPStan nível 8 e PSR-12 no `pr.yml`.
+- PHPStan nível 8, PSR-12 e SonarCloud com quality gate no `pr.yml`.
+
+### Evidências
+
+- **Cobertura por PR:** cada run do [`pr.yml`](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml)
+  escreve a linha de cobertura no resumo do run e guarda o `coverage.xml` como artefato
+  (`cobertura`); abaixo de 80% o job falha.
+- **Qualidade:** [SonarCloud](https://sonarcloud.io/summary/new_code?id=bregaldahq_oficina-api), com o
+  quality gate como checagem obrigatória do PR.
+- **Deploy:** cada run do [`deploy.yml`](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml)
+  roda os testes antes, faz o smoke depois e marca o deploy no New Relic.
+
+### Observabilidade da saga
+
+New Relic, como na Fase 3, mais o que a Fase 4 pede (§8 do contrato):
+
+- **Trace pela fila:** quem publica grava o trace no envelope (`trace.newrelic`), e o worker de
+  cada serviço abre uma transação por mensagem que continua esse trace. Uma OS aparece no
+  *distributed tracing* do New Relic da API do OS até o worker da Execução e do Faturamento.
+- **Eventos da saga:** `SagaStarted`, `SagaStepCompleted` (com o tempo do passo),
+  `SagaCompensated`, `SagaFailed` e, no Faturamento, `PaymentConfirmed`.
+- **Dashboard "Saga"** ([`docs/fase-4/newrelic/dashboard-saga.json`](docs/fase-4/newrelic/dashboard-saga.json)):
+  funil por passo, tempo por passo, compensações por motivo, mensagens por serviço e resultado,
+  DLQs e sagas paradas.
+- **Alertas** ([`docs/fase-4/newrelic/alertas-saga.json`](docs/fase-4/newrelic/alertas-saga.json)):
+  mensagem na DLQ, saga `FAILED`, saga parada além do prazo, taxa de compensação, erro no
+  webhook do Mercado Pago e worker falhando.
+- Importados com `scripts/newrelic-import.py`, junto com os da Fase 3
+  ([`docs/fase-4/newrelic/README.md`](docs/fase-4/newrelic/README.md)).
 
 ---
 

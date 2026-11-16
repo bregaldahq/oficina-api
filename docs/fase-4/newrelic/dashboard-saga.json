@@ -1,0 +1,327 @@
+{
+  "name": "Oficina Mecânica · Saga",
+  "description": "A saga da OS pelos três serviços (docs/fase-4/CONTRATOS.md §8, no oficina-api): marcos SagaStarted, SagaStepCompleted, SagaCompensated e SagaFailed, PaymentConfirmed do Faturamento, o log message.processed dos workers e o trace pela fila. Importado por scripts/newrelic-import.py, que troca a conta e o ambiente.",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Saga",
+      "description": "Funil, tempo por passo e compensações.",
+      "widgets": [
+        {
+          "title": "Sagas abertas",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) AS 'Sagas abertas' FROM SagaStarted WHERE env = 'prod' SINCE 1 day ago COMPARE WITH 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Desfecho das sagas",
+          "layout": {
+            "column": 4,
+            "row": 1,
+            "width": 5,
+            "height": 3
+          },
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT filter(count(*), WHERE eventType() = 'SagaStepCompleted' AND step = 'REPAIR') AS 'Concluídas', filter(count(*), WHERE eventType() = 'SagaCompensated') AS 'Compensadas', filter(count(*), WHERE eventType() = 'SagaFailed') - filter(count(*), WHERE eventType() = 'SagaCompensated' AND afterFailure IS true) AS 'Falharam (pedem uma pessoa)' FROM SagaStepCompleted, SagaCompensated, SagaFailed WHERE env = 'prod' SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Pagamentos confirmados",
+          "layout": {
+            "column": 9,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) AS 'Pagamentos', sum(amount) AS 'Valor (R$)' FROM PaymentConfirmed WHERE env = 'prod' SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Funil da saga por passo",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.funnel"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT funnel(sagaId, WHERE eventType() = 'SagaStarted' AS 'Aberta', WHERE eventType() = 'SagaStepCompleted' AND step = 'DIAGNOSIS' AS 'Diagnóstico', WHERE eventType() = 'SagaStepCompleted' AND step = 'BUDGET' AS 'Orçamento', WHERE eventType() = 'SagaStepCompleted' AND step = 'APPROVAL' AS 'Aprovação', WHERE eventType() = 'SagaStepCompleted' AND step = 'PAYMENT' AS 'Pagamento', WHERE eventType() = 'SagaStepCompleted' AND step = 'REPAIR' AS 'Reparo') FROM SagaStarted, SagaStepCompleted WHERE env = 'prod' SINCE 7 days ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Tempo por passo (s)",
+          "layout": {
+            "column": 7,
+            "row": 4,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.bar"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT average(durationSeconds) AS 'média', percentile(durationSeconds, 95) AS 'p95' FROM SagaStepCompleted WHERE env = 'prod' FACET step SINCE 7 days ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Compensações por passo e motivo",
+          "layout": {
+            "column": 1,
+            "row": 8,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) AS 'Compensações' FROM SagaCompensated WHERE env = 'prod' FACET failedStep, reason SINCE 7 days ago LIMIT 20"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Taxa de compensação (%)",
+          "layout": {
+            "column": 7,
+            "row": 8,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT filter(count(*), WHERE eventType() = 'SagaCompensated') * 100 / filter(count(*), WHERE eventType() = 'SagaStarted') AS '% compensadas' FROM SagaStarted, SagaCompensated WHERE env = 'prod' SINCE 1 day ago TIMESERIES 1 hour"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Sagas que falharam (compensação sem confirmação)",
+          "layout": {
+            "column": 1,
+            "row": 12,
+            "width": 12,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT timestamp, sagaId, orderId, failedStep, reason, pending, correlationId FROM SagaFailed WHERE env = 'prod' SINCE 7 days ago LIMIT 50"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mensageria",
+      "description": "Workers, trace pela fila, DLQs e sagas paradas.",
+      "widgets": [
+        {
+          "title": "Mensagens processadas por serviço e resultado",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.area"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) FROM Log WHERE env = 'prod' AND message = 'message.processed' FACET service, outcome SINCE 3 hours ago TIMESERIES"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Mensagens com erro por tipo",
+          "layout": {
+            "column": 7,
+            "row": 1,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) AS 'Erros', latest(exception_message) AS 'Último erro' FROM Log WHERE env = 'prod' AND message = 'message.processed' AND outcome = 'error' FACET service, message_type SINCE 1 day ago LIMIT 20"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Duração do processamento por tipo (ms)",
+          "layout": {
+            "column": 1,
+            "row": 5,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.bar"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT average(duration_ms) AS 'média', percentile(duration_ms, 95) AS 'p95' FROM Log WHERE env = 'prod' AND message = 'message.processed' FACET message_type SINCE 1 day ago LIMIT 30"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Transações de mensagem (trace pela fila)",
+          "layout": {
+            "column": 7,
+            "row": 5,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT count(*) AS 'Mensagens', average(duration * 1000) AS 'ms (média)', percentage(count(*), WHERE error IS true) AS '% erro' FROM Transaction WHERE appName IN ('oficina-api-prod', 'oficina-faturamento-prod', 'oficina-execucao-prod') AND name LIKE '%message/%' FACET appName, name SINCE 1 day ago LIMIT 30"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Mensagens nas DLQs",
+          "layout": {
+            "column": 1,
+            "row": 9,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT max(provider.approximateNumberOfMessagesVisible.Maximum) AS 'na DLQ' FROM QueueSample WHERE provider.queueName LIKE 'oficina-prod-%-dlq' FACET provider.queueName SINCE 1 day ago TIMESERIES"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Sagas paradas além do prazo (alerta ao mecânico)",
+          "layout": {
+            "column": 7,
+            "row": 9,
+            "width": 6,
+            "height": 4
+          },
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [
+                  0
+                ],
+                "query": "SELECT timestamp, saga_id, os_id, step, correlation_id FROM Log WHERE service = 'oficina-api' AND env = 'prod' AND message = 'saga.stalled' SINCE 7 days ago LIMIT 50"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

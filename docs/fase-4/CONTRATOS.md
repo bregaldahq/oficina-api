@@ -496,6 +496,13 @@ Mantém o New Relic da Fase 3.
 
 `ServiceOrderCreated` e `ServiceOrderStatusChanged` continuam.
 
+> **Adendo F4-4 (atributos dos eventos da saga).** Os quatro eventos da saga levam também
+> `correlationId`, para cruzar com o log. `SagaFailed` leva `pending` (as compensações sem
+> confirmação, separadas por vírgula). `SagaCompensated` leva `afterFailure`: `true` quando uma
+> confirmação atrasada fecha uma saga que já tinha emitido `SagaFailed`, para o dashboard não
+> contar a mesma saga como falha e como compensada. `SagaStepCompleted` é emitido também para o
+> passo `REPAIR`, quando a saga termina.
+
 ### Alertas novos
 
 Mensagem visível em qualquer DLQ; saga em `FAILED`; saga parada além do prazo do passo; taxa

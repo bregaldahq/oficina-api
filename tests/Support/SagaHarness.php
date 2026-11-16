@@ -57,6 +57,9 @@ final class SagaHarness
     public Worker $worker;
     public SweepSagasUseCase $sweep;
 
+    /** @var list<\App\Domain\Event\SagaEvent> os marcos da saga despachados depois do commit */
+    public array $sagaEvents = [];
+
     /** @var list<string> "DE→PARA" de cada mudança de status despachada */
     public array $transitions = [];
 
@@ -80,6 +83,10 @@ final class SagaHarness
         $events->subscribe(ServiceOrderStatusChangedEvent::class, function (ServiceOrderStatusChangedEvent $e) use ($history): void {
             $this->transitions[] = $e->previousStatus . '→' . $e->newStatus;
             $history->onStatusChanged($e);
+        });
+
+        $events->subscribe(\App\Domain\Event\SagaEvent::class, function (\App\Domain\Event\SagaEvent $e): void {
+            $this->sagaEvents[] = $e;
         });
 
         $relay        = new OutboxRelay($this->sagas, $this->bus, $this->observers, $this->observers);

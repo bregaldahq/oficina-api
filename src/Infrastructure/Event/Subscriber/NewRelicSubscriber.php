@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Event\Subscriber;
 
+use App\Domain\Event\SagaEvent;
 use App\Domain\Event\ServiceOrderCreatedEvent;
 use App\Domain\Event\ServiceOrderStatusChangedEvent;
 use App\Domain\Repository\ServiceOrderStatusHistoryRepositoryInterface;
@@ -65,6 +66,18 @@ final class NewRelicSubscriber
             'totalAmount'     => $event->totalAmount,
             'correlationId'   => $this->context->getCorrelationId(),
             'env'             => $this->env,
+        ]);
+    }
+
+    /** Os marcos da saga (docs/fase-4/CONTRATOS.md §8): SagaStarted, SagaStepCompleted, SagaCompensated, SagaFailed. */
+    public function onSaga(SagaEvent $event): void
+    {
+        ($this->recorder)($event->name, [
+            'sagaId'        => $event->sagaId,
+            'orderId'       => $event->orderId,
+            'correlationId' => $event->correlationId,
+            ...$event->attributes,
+            'env' => $this->env,
         ]);
     }
 

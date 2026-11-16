@@ -14,7 +14,7 @@ use App\Domain\Saga\Saga;
 /**
  * O fim comum de toda mudança na saga: grava saga, OS, outbox e inbox numa transação e, só
  * depois do commit, despacha os eventos de domínio da OS (histórico de status, New Relic,
- * e-mail; ADR-004) e publica a outbox.
+ * e-mail; ADR-004) e os marcos da saga (New Relic), e publica a outbox.
  */
 final class SagaCommit
 {
@@ -32,6 +32,7 @@ final class SagaCommit
         if ($order !== null) {
             $this->events->dispatchAll($order->releaseEvents());
         }
+        $this->events->dispatchAll($saga->releaseEvents());
         $this->relay?->relay();
     }
 }

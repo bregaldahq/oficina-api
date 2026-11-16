@@ -383,4 +383,41 @@ class SagaFlowTest extends TestCase
 
         $this->assertSame(Saga::REASON_MAX, mb_strlen((string)$this->h->saga($osId)->getReason()));
     }
+
+    public function testMarcosDaSagaParaOObservabilidade(): void
+    {
+        $osId = $this->h->until(Saga::STEP_APPROVAL);
+        $this->h->clock->advance(30);
+        $this->h->reply($osId, 'budget.approved', ['budget_id' => 'bud-1']);
+
+        $mine = array_values(array_filter($this->h->sagaEvents, static fn ($e) => $e->orderId === $osId));
+        $this->assertSame(
+            ['SagaStarted', 'SagaStepCompleted', 'SagaStepCompleted', 'SagaStepCompleted'],
+            array_map(static fn ($e) => $e->name, $mine),
+        );
+        $this->assertSame(['step' => 'APPROVAL', 'durationSeconds' => 30], $mine[3]->attributes, 'quanto o cliente levou para aprovar');
+        $this->assertSame('corr-1', $mine[0]->correlationId);
+
+        $failing = $this->h->until(Saga::STEP_BUDGET);
+        $this->h->reply($failing, 'budget.failed', ['reason' => 'ITEM_NOT_FOUND']);
+        foreach ([61, 121, 181] as $seconds) {
+            $this->h->clock->advance($seconds);
+            $this->h->tick();
+        }
+        $last = $this->lastSagaEvent($failing);
+        $this->assertSame('SagaFailed', $last->name);
+        $this->assertSame(['failedStep' => 'BUDGET', 'reason' => 'ITEM_NOT_FOUND', 'pending' => 'execution.cancel'], $last->attributes);
+
+        $this->h->reply($failing, 'execution.cancelled');
+        $last = $this->lastSagaEvent($failing);
+        $this->assertSame(['SagaCompensated', ['failedStep' => 'BUDGET', 'reason' => 'ITEM_NOT_FOUND', 'afterFailure' => true]], [$last->name, $last->attributes]);
+    }
+
+    private function lastSagaEvent(string $osId): \App\Domain\Event\SagaEvent
+    {
+        $mine = array_values(array_filter($this->h->sagaEvents, static fn ($e) => $e->orderId === $osId));
+        $this->assertNotSame([], $mine);
+
+        return $mine[count($mine) - 1];
+    }
 }

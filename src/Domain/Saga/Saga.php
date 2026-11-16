@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Saga;
 
+use App\Domain\Event\SagaEvent;
 use App\Domain\Exception\DomainException;
 
 /**
@@ -46,6 +47,9 @@ final class Saga
 
     /** @var list<array{type: string, payload: array<string, mixed>}> */
     private array $commands = [];
+
+    /** @var list<SagaEvent> marcos para a observabilidade, soltos depois do commit */
+    private array $events = [];
 
     /**
      * @param array<string, mixed>                $data    dados dos próximos comandos
@@ -107,6 +111,7 @@ final class Saga
             0,
         );
         $saga->log($now, 'saga.started', self::STEP_DIAGNOSIS);
+        $saga->record(SagaEvent::STARTED, $now, []);
         $saga->send('execution.request-diagnosis', [
             'customer_name' => $customer['name'],
             'vehicle'       => $vehicle,
@@ -152,6 +157,7 @@ final class Saga
     public function advance(string $step, ?\DateTimeImmutable $deadline, \DateTimeImmutable $now, ?string $command = null, array $payload = []): void
     {
         $this->requireRunning('avançar');
+        $this->stepCompleted($now);
         $this->step       = $step;
         $this->deadlineAt = $deadline;
         $this->alerted    = false;
@@ -251,6 +257,11 @@ final class Saga
             $this->state      = self::FAILED;
             $this->deadlineAt = null;
             $this->log($now, 'saga.failed', $this->step, 'compensações sem confirmação: ' . implode(', ', array_keys($this->pending)));
+            $this->record(SagaEvent::FAILED, $now, [
+                'failedStep' => $this->failedStep,
+                'reason'     => $this->reason,
+                'pending'    => implode(',', array_keys($this->pending)),
+            ]);
 
             return;
         }
@@ -279,6 +290,7 @@ final class Saga
     public function complete(\DateTimeImmutable $now): void
     {
         $this->requireRunning('concluir');
+        $this->stepCompleted($now);
         $this->state      = self::COMPLETED;
         $this->step       = self::STEP_DONE;
         $this->deadlineAt = null;
@@ -388,6 +400,15 @@ final class Saga
         return $this->version;
     }
 
+    /** @return list<SagaEvent> */
+    public function releaseEvents(): array
+    {
+        $events       = $this->events;
+        $this->events = [];
+
+        return $events;
+    }
+
     /** @return list<array{type: string, payload: array<string, mixed>}> */
     public function releaseCommands(): array
     {
@@ -418,9 +439,36 @@ final class Saga
 
     private function finishCompensation(\DateTimeImmutable $now): void
     {
+        // Confirmação atrasada de uma saga FAILED: a mesma saga já contou como falha, e o
+        // dashboard desconta as que se recuperaram (afterFailure).
+        $afterFailure     = $this->state === self::FAILED;
         $this->state      = self::COMPENSATED;
         $this->deadlineAt = null;
         $this->log($now, 'saga.compensated', $this->step);
+        $this->record(SagaEvent::COMPENSATED, $now, ['failedStep' => $this->failedStep, 'reason' => $this->reason, 'afterFailure' => $afterFailure]);
+    }
+
+    /** O passo atual terminou: quanto tempo ele levou, desde que a saga entrou nele. */
+    private function stepCompleted(\DateTimeImmutable $now): void
+    {
+        $enteredAt = $this->createdAt;
+        foreach (array_reverse($this->history) as $entry) {
+            if (in_array($entry['event'] ?? null, ['saga.started', 'step.entered'], true) && is_string($entry['at'] ?? null)) {
+                $enteredAt = \DateTimeImmutable::createFromFormat(self::DATE, $entry['at'], new \DateTimeZone('UTC')) ?: $this->createdAt;
+                break;
+            }
+        }
+
+        $this->record(SagaEvent::STEP_COMPLETED, $now, [
+            'step'            => $this->step,
+            'durationSeconds' => max(0, $now->getTimestamp() - $enteredAt->getTimestamp()),
+        ]);
+    }
+
+    /** @param array<string, scalar|null> $attributes */
+    private function record(string $name, \DateTimeImmutable $now, array $attributes): void
+    {
+        $this->events[] = new SagaEvent($name, $this->id, $this->osId, $this->correlationId, $attributes, $now);
     }
 
     private function requireRunning(string $action): void

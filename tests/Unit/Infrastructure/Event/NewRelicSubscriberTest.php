@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Infrastructure\Event;
 
+use App\Domain\Event\SagaEvent;
 use App\Domain\Event\ServiceOrderCreatedEvent;
 use App\Domain\Event\ServiceOrderStatusChangedEvent;
 use App\Domain\Repository\ServiceOrderStatusHistoryRepositoryInterface;
@@ -143,5 +144,15 @@ class NewRelicSubscriberTest extends TestCase
         $this->subscriber()->onCreated(new ServiceOrderCreatedEvent('order-1', 'cust-1', 'veh-1'));
 
         $this->assertNull($this->recorded[0][1]['correlationId']);
+    }
+
+    public function testMarcoDaSagaLevaOsAtributosDoContratoDaFase4(): void
+    {
+        $this->subscriber()->onSaga(new SagaEvent(SagaEvent::COMPENSATED, 'saga-1', 'order-1', 'corr-9', ['failedStep' => 'PAYMENT', 'reason' => 'cc_rejected'], new \DateTimeImmutable()));
+
+        $this->assertSame([[
+            'SagaCompensated',
+            ['sagaId' => 'saga-1', 'orderId' => 'order-1', 'correlationId' => 'corr-9', 'failedStep' => 'PAYMENT', 'reason' => 'cc_rejected', 'env' => 'prod'],
+        ]], $this->recorded);
     }
 }
