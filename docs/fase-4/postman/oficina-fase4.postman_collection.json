@@ -1,0 +1,1700 @@
+{
+  "info": {
+    "_postman_id": "1aab2144-69c1-5f49-939a-cca02c03d37a",
+    "name": "Oficina Mecânica — Fase 4 (saga)",
+    "description": "A saga da OS pelos três microsserviços, pelo API Gateway: OS (`/api/...`), Faturamento (`/api/billing/...`) e Execução (`/api/execution/...`).\n\nRode em ordem, com o ambiente de homologação. As mensagens entre os serviços são assíncronas: no Collection Runner use um delay de 3000 ms entre as requisições (ou rode de novo a que conferir um status que ainda não chegou).\n\nO pagamento (pasta 6) é manual: abra o `payment_url` no navegador e pague com um cartão de teste do sandbox do Mercado Pago. Para pular o pagamento, rode só as pastas 8 a 10.\n\nContrato: docs/fase-4/CONTRATOS.md, §4 (rotas) e §6 (saga).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// CPF com dígito verificador válido e placa Mercosul, novos a cada execução da coleção.",
+          "if (!pm.collectionVariables.get('cpfDemo')) {",
+          "    const n = [];",
+          "    for (let i = 0; i < 9; i++) { n.push(Math.floor(Math.random() * 10)); }",
+          "    const dv = (base) => { let s = 0; for (let i = 0; i < base.length; i++) { s += base[i] * (base.length + 1 - i); } const r = (s * 10) % 11; return r === 10 ? 0 : r; };",
+          "    n.push(dv(n));",
+          "    n.push(dv(n));",
+          "    pm.collectionVariables.set('cpfDemo', n.join(''));",
+          "}",
+          "if (!pm.collectionVariables.get('placaDemo')) {",
+          "    const L = () => String.fromCharCode(65 + Math.floor(Math.random() * 26));",
+          "    const D = () => Math.floor(Math.random() * 10);",
+          "    pm.collectionVariables.set('placaDemo', L() + L() + L() + D() + L() + D() + D());",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "tokenAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tokenCliente",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "serviceItemId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "partId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "cpfDemo",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "placaDemo",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "customerId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "vehicleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "serviceOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "budgetId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "serviceOrderId2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "budgetId2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "serviceOrderId3",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Saúde dos três serviços",
+      "description": "Rotas públicas, sem token: cada serviço tem as próprias sondas, atrás do mesmo gateway.",
+      "item": [
+        {
+          "name": "GET /api/health (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "health"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/ready (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ready"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/billing/health (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "health"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/billing/ready (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "ready"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/execution/health (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "health"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/execution/ready (público)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "ready"
+              ]
+            },
+            "description": "Sonda pública."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Login do admin",
+      "description": "O token do admin vale nos três serviços (mesmo JWT, validado por cada um).",
+      "item": [
+        {
+          "name": "POST /api/auth/login (200) — salva tokenAdmin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('tokenAdmin', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Login do admin no serviço de OS.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Catálogo (Faturamento)",
+      "description": "Catálogo e estoque saíram do OS e moram no Faturamento. Guarda um serviço e uma peça para o diagnóstico.",
+      "item": [
+        {
+          "name": "GET /api/billing/service-items — salva serviceItemId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const items = Array.isArray(list) ? list : (list.data || list.items || []);",
+                  "pm.test('catálogo com serviços', () => pm.expect(items.length).to.be.above(0));",
+                  "pm.collectionVariables.set('serviceItemId', items[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/service-items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "service-items"
+              ]
+            },
+            "description": "Serviços do catálogo."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/billing/parts — salva partId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "const parts = Array.isArray(list) ? list : (list.data || list.items || []);",
+                  "const part = parts.find(p => (p.stock_quantity - (p.reserved_quantity || 0)) >= 2) || parts[0];",
+                  "pm.test('peça com estoque', () => pm.expect(part).to.exist);",
+                  "pm.collectionVariables.set('partId', part.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/parts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "parts"
+              ]
+            },
+            "description": "Peças com estoque e reserva."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Cliente e veículo (OS)",
+      "description": "Cadastro no serviço de OS. CPF e placa gerados a cada execução da coleção.",
+      "item": [
+        {
+          "name": "POST /api/customers (201) — salva customerId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('customerId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "customers"
+              ]
+            },
+            "description": "Cliente com CPF válido gerado.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cliente Fase 4\",\n  \"document\": \"{{cpfDemo}}\",\n  \"email\": \"cliente.fase4@example.com\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/vehicles (201) — salva vehicleId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('vehicleId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/vehicles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vehicles"
+              ]
+            },
+            "description": "Veículo com placa Mercosul gerada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": \"{{customerId}}\",\n  \"license_plate\": \"{{placaDemo}}\",\n  \"brand\": \"Fiat\",\n  \"model\": \"Uno\",\n  \"year\": 2015\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Abrir a OS (início da saga)",
+      "description": "A OS nasce RECEIVED e a saga começa no passo DIAGNOSIS: a OS publica execution.request-diagnosis e a Execução abre a tarefa.",
+      "item": [
+        {
+          "name": "POST /api/service-orders (201) — salva serviceOrderId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const os = pm.response.json();",
+                  "pm.collectionVariables.set('serviceOrderId', os.id);",
+                  "pm.test('saga no passo DIAGNOSIS', () => pm.expect(os.saga.step).to.eql('DIAGNOSIS'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders"
+              ]
+            },
+            "description": "Abre a OS e inicia a saga orquestrada.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": \"{{customerId}}\",\n  \"vehicle_id\": \"{{vehicleId}}\",\n  \"description\": \"Barulho no freio dianteiro\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/execution/tasks/{id} — a tarefa chegou na fila",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "A tarefa tem o mesmo id da OS. Se der 404, a mensagem ainda está na fila: rode de novo (ou use o delay do runner)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Diagnóstico (Execução)",
+      "description": "O mecânico diagnostica e lista os itens. A saga pede o orçamento ao Faturamento, que reserva as peças.",
+      "item": [
+        {
+          "name": "POST .../diagnosis/start (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId}}/diagnosis/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId}}",
+                "diagnosis",
+                "start"
+              ]
+            },
+            "description": "A OS vai para DIAGNOSIS."
+          },
+          "response": []
+        },
+        {
+          "name": "POST .../diagnosis/complete (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tarefa DIAGNOSED', () => pm.expect(pm.response.json().status).to.eql('DIAGNOSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId}}/diagnosis/complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId}}",
+                "diagnosis",
+                "complete"
+              ]
+            },
+            "description": "Itens do diagnóstico, com ids do catálogo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"service_item_id\": \"{{serviceItemId}}\"\n    },\n    {\n      \"part_id\": \"{{partId}}\",\n      \"quantity\": 2\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id} — orçamento gerado, salva budgetId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em AWAITING_APPROVAL', () => pm.expect(os.status).to.eql('AWAITING_APPROVAL'));",
+                  "pm.collectionVariables.set('budgetId', os.budget_id);",
+                  "pm.test('total do orçamento', () => pm.expect(os.total_amount).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "AWAITING_APPROVAL com budget_id e total vindos do Faturamento."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Aprovação e pagamento (Faturamento + Mercado Pago)",
+      "description": "A aprovação chega pelo webhook com X-Webhook-Token. A saga pede a cobrança, e o link do Checkout Pro aparece na OS.",
+      "item": [
+        {
+          "name": "GET /api/billing/budgets/{id} (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/budgets/{{budgetId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "budgets",
+                "{{budgetId}}"
+              ]
+            },
+            "description": "Orçamento com itens, preços e reserva."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/billing/budgets/{id}/approval — aprova (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhookToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/budgets/{{budgetId}}/approval",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "budgets",
+                "{{budgetId}}",
+                "approval"
+              ]
+            },
+            "description": "Público no gateway, protegido pelo X-Webhook-Token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approved\": true\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id} — link de pagamento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em AWAITING_PAYMENT', () => pm.expect(os.status).to.eql('AWAITING_PAYMENT'));",
+                  "pm.test('payment_url presente', () => pm.expect(os.payment_url).to.be.a('string'));",
+                  "console.log('Pague em: ' + os.payment_url);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "AWAITING_PAYMENT com payment_url. Abra o link no navegador e pague com um cartão de teste do sandbox do Mercado Pago; o webhook confirma o pagamento."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id} — pago, em EXECUTING",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em EXECUTING', () => pm.expect(os.status).to.eql('EXECUTING'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "Depois do pagamento: o webhook do Mercado Pago confirma, o Faturamento dá baixa no estoque e a saga pede o reparo."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Reparo e entrega",
+      "description": "Reparo na Execução; a saga conclui e a OS fica FINISHED. A entrega é do admin, no OS.",
+      "item": [
+        {
+          "name": "POST .../repair/start (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId}}/repair/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId}}",
+                "repair",
+                "start"
+              ]
+            },
+            "description": "Mecânico começa o reparo."
+          },
+          "response": []
+        },
+        {
+          "name": "POST .../repair/complete (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId}}/repair/complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId}}",
+                "repair",
+                "complete"
+              ]
+            },
+            "description": "Reparo concluído."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id} — FINISHED, saga COMPLETED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em FINISHED', () => pm.expect(os.status).to.eql('FINISHED'));",
+                  "pm.test('saga COMPLETED', () => pm.expect(os.saga.state).to.eql('COMPLETED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "Saga concluída."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/service-orders/{id}/delivery (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('DELIVERED', () => pm.expect(pm.response.json().status).to.eql('DELIVERED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId}}/delivery",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId}}",
+                "delivery"
+              ]
+            },
+            "description": "FINISHED → DELIVERED."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "8. Compensação: cliente recusa o orçamento",
+      "description": "Uma segunda OS até o orçamento; a recusa libera as peças no Faturamento e a saga cancela a tarefa na Execução.",
+      "item": [
+        {
+          "name": "POST /api/service-orders — segunda OS (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('serviceOrderId2', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders"
+              ]
+            },
+            "description": "Salva serviceOrderId2.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": \"{{customerId}}\",\n  \"vehicle_id\": \"{{vehicleId}}\",\n  \"description\": \"Revisão completa\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST .../diagnosis/start (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId2}}/diagnosis/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId2}}",
+                "diagnosis",
+                "start"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "POST .../diagnosis/complete (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId2}}/diagnosis/complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId2}}",
+                "diagnosis",
+                "complete"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"service_item_id\": \"{{serviceItemId}}\"\n    },\n    {\n      \"part_id\": \"{{partId}}\",\n      \"quantity\": 2\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id2} — salva budgetId2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em AWAITING_APPROVAL', () => pm.expect(os.status).to.eql('AWAITING_APPROVAL'));",
+                  "pm.collectionVariables.set('budgetId2', os.budget_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId2}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId2}}"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/billing/budgets/{id2}/approval — recusa (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhookToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/budgets/{{budgetId2}}/approval",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "budgets",
+                "{{budgetId2}}",
+                "approval"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approved\": false\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/{id2} — REJECTED, saga compensada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const os = pm.response.json();",
+                  "pm.test('OS em REJECTED', () => pm.expect(os.status).to.eql('REJECTED'));",
+                  "pm.test('saga compensando ou compensada', () => pm.expect(['COMPENSATING','COMPENSATED']).to.include(os.saga.state));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId2}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId2}}"
+              ]
+            },
+            "description": "A saga fica COMPENSATING até a Execução confirmar o cancelamento da tarefa; rode de novo se ainda estiver compensando."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "9. Compensação: admin cancela",
+      "description": "Terceira OS cancelada pelo admin no diagnóstico: a saga cancela a tarefa na Execução.",
+      "item": [
+        {
+          "name": "POST /api/service-orders — terceira OS (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('serviceOrderId3', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders"
+              ]
+            },
+            "description": "Salva serviceOrderId3.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customer_id\": \"{{customerId}}\",\n  \"vehicle_id\": \"{{vehicleId}}\",\n  \"description\": \"Cliente vai desistir\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/service-orders/{id3}/cancellation sem motivo (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId3}}/cancellation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId3}}",
+                "cancellation"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/service-orders/{id3}/cancellation (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('CANCELLED', () => pm.expect(pm.response.json().status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/{{serviceOrderId3}}/cancellation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "{{serviceOrderId3}}",
+                "cancellation"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"cliente desistiu\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/execution/tasks/{id3} — tarefa cancelada",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('tarefa CANCELLED', () => pm.expect(pm.response.json().status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId3}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId3}}"
+              ]
+            },
+            "description": "Depois da mensagem execution.cancel."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "10. Visão do cliente",
+      "description": "O cliente entra pelo CPF (a auth-cpf consulta o serviço de OS) e vê só as próprias OS e orçamentos.",
+      "item": [
+        {
+          "name": "POST /auth/cpf (200) — salva tokenCliente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('tokenCliente', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/cpf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "cpf"
+              ]
+            },
+            "description": "Token do cliente.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{cpfDemo}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders/me (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('três OS', () => pm.expect(pm.response.json().length).to.be.at.least(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders",
+                "me"
+              ]
+            },
+            "description": "As três OS deste cliente."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/billing/budgets/by-order/{id} (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/budgets/by-order/{{serviceOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "budgets",
+                "by-order",
+                "{{serviceOrderId}}"
+              ]
+            },
+            "description": "O orçamento da OS dele."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/service-orders com token de cliente (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/service-orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "service-orders"
+              ]
+            },
+            "description": "Lista geral é do admin."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/billing/parts com token de cliente (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenCliente}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/billing/parts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "billing",
+                "parts"
+              ]
+            },
+            "description": "Catálogo é só do admin."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
