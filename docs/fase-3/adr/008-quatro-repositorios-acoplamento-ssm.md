@@ -2,7 +2,7 @@
 
 ## Status
 
-Aceita (Fase 3).
+Aceita (Fase 3) · Ampliada pela [ADR-016](../../fase-4/adr/016-seis-repositorios-infra-junto-do-servico.md) na Fase 4: os repositórios passam a seis; o acoplamento só por SSM continua.
 
 ## Contexto
 

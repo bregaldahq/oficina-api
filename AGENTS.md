@@ -98,6 +98,10 @@ Não crie um conceito novo em português ao lado de um que já existe em inglês
 - dashboards e alertas do New Relic (`newrelic/`, importados por `scripts/newrelic-import.py`);
 - a coleção Postman.
 
+`docs/fase-4/` tem o **desenho** da Fase 4 (três microsserviços, saga orquestrada, mensageria):
+`CONTRATOS.md` (adendos ao da Fase 3), as ADRs 011 a 017 e os diagramas. Ainda não está
+implementado: enquanto um item de lá não entrar em `develop`, vale o contrato da Fase 3.
+
 `docs/DOMAIN-STORYTELLING.md` descreve os fluxos de negócio.
 
 ## Convenções

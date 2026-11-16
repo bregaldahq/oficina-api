@@ -2,7 +2,7 @@
 
 ## Status
 
-Aceita (Fase 3).
+Aceita (Fase 3) · Restrita pela [ADR-014](../../fase-4/adr/014-um-banco-por-servico.md) na Fase 4: o banco da fundação passa a ser o do serviço de OS; os outros serviços têm banco próprio.
 
 ## Contexto
 
