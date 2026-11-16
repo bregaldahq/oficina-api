@@ -102,7 +102,9 @@ class SagaEndpointsTest extends TestCase
 
         $this->assertSame(401, $this->call($controller, 'byDocument', ['document' => '52998224725'], 'errado')[0]);
         $this->assertSame(400, $this->call($controller, 'byDocument', ['document' => '123'], 'token-interno')[0]);
-        $this->assertSame(404, $this->call($controller, 'byDocument', ['document' => '39053344705'], 'token-interno')[0]);
+        // O corpo do 404 é contrato com a auth-cpf (adendo F4-3): é ele que separa "CPF não
+        // cadastrado" de "rota não existe".
+        $this->assertSame([404, ['error' => 'Cliente não encontrado.']], $this->call($controller, 'byDocument', ['document' => '39053344705'], 'token-interno'));
         $this->assertSame(401, $this->call(new InternalCustomerController(new PdoCustomerRepository(), ''), 'byDocument', ['document' => '52998224725'], '')[0], 'sem token configurado, fechado');
     }
 }
