@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Application\Worker;
 
 use App\Application\Messaging\OutboxRelay;
+use App\Application\Messaging\RetryLaterException;
 use App\Application\Port\LoggerInterface;
 use App\Application\Port\MessageQueueInterface;
 use App\Application\Port\TracerInterface;
@@ -78,6 +79,15 @@ final class Worker
 
                 $this->logger->info('message.processed', $context + [
                     'outcome'     => $outcome,
+                    'duration_ms' => round((microtime(true) - $startedAt) * 1000, 1),
+                ]);
+            } catch (RetryLaterException $e) {
+                // Válida, mas ainda não aplicável: fica na fila e volta depois do visibility
+                // timeout. Não é erro; se nunca ficar aplicável, a DLQ mostra.
+                $this->tracer->endMessage(false);
+                $this->logger->info('message.processed', $context + [
+                    'outcome'     => 'retry',
+                    'reason'      => $e->getMessage(),
                     'duration_ms' => round((microtime(true) - $startedAt) * 1000, 1),
                 ]);
             } catch (InvalidMessageException $e) {

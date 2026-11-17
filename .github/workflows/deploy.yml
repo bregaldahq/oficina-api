@@ -174,8 +174,17 @@ jobs:
             deploy/base/migrations-configmap.yaml
           kubectl kustomize "$OVERLAY"
 
-      - name: Aplicar manifests
-        run: kubectl apply -k "$OVERLAY"
+      # Antes do Job, só o que ele usa e o que não roda código (ConfigMaps, ExternalSecret,
+      # ServiceAccount, Service): os Deployments ficam para depois da migration, para a versão
+      # nova do código só subir com o schema que ela espera.
+      - name: Aplicar configuração (sem os Deployments)
+        run: |
+          set -euo pipefail
+          kubectl kustomize "$OVERLAY" > /tmp/manifests.yaml
+          kubectl create --dry-run=client -o json -f /tmp/manifests.yaml \
+            | jq '{apiVersion: "v1", kind: "List", items: [(if .kind == "List" then .items[] else . end)
+                  | select(.kind | IN("Deployment", "HorizontalPodAutoscaler", "PodDisruptionBudget", "TargetGroupBinding") | not)]}' \
+            | kubectl apply -f -
 
       # ── Migrations ────────────────────────────────────────────────────────
       # O Job aplica os SQL versionados que vêm do repo oficina-infra-fundacao
@@ -208,6 +217,9 @@ jobs:
             exit 1
           fi
           kubectl -n "$NS" logs job/oficina-migrate --all-containers --tail=100
+
+      - name: Aplicar manifests (Deployments, depois da migration)
+        run: kubectl apply -k "$OVERLAY"
 
       - name: Propagar mudanca da license key para os pods
         run: |

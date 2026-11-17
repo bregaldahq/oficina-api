@@ -1114,6 +1114,43 @@
           "response": []
         },
         {
+          "name": "GET /api/execution/tasks/{id2} — a tarefa chegou na fila",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/execution/tasks/{{serviceOrderId2}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execution",
+                "tasks",
+                "{{serviceOrderId2}}"
+              ]
+            },
+            "description": "A mensagem execution.request-diagnosis cria a tarefa: espere ela chegar antes do diagnóstico (404 ainda é fila)."
+          },
+          "response": []
+        },
+        {
           "name": "POST .../diagnosis/start (200)",
           "event": [
             {

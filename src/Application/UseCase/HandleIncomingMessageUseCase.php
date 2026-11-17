@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Application\UseCase;
 
+use App\Application\Messaging\RetryLaterException;
 use App\Application\Port\ClockInterface;
 use App\Application\Port\SagaRepositoryInterface;
 use App\Application\UseCase\Saga\SagaCommit;
+use App\Domain\Exception\ConcurrencyException;
 use App\Domain\Exception\DuplicateMessageException;
 use App\Domain\Exception\NotFoundException;
 use App\Domain\Messaging\Message;
@@ -32,7 +34,24 @@ final class HandleIncomingMessageUseCase
     ) {
     }
 
+    /** Novas tentativas na hora, com a saga recarregada, quando outra gravação ganhou a corrida. */
+    private const CONCURRENCY_ATTEMPTS = 3;
+
     public function execute(Message $message): string
+    {
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $this->apply($message);
+            } catch (ConcurrencyException $e) {
+                // A API, a varredura de prazos ou outra mensagem gravou a mesma saga antes.
+                if ($attempt >= self::CONCURRENCY_ATTEMPTS) {
+                    throw new RetryLaterException('A saga mudou durante o processamento: ' . $e->getMessage(), 0, $e);
+                }
+            }
+        }
+    }
+
+    private function apply(Message $message): string
     {
         $saga = $this->sagas->findByOsId($message->osId);
         if ($saga === null || $saga->getId() !== $message->sagaId) {
@@ -46,6 +65,10 @@ final class HandleIncomingMessageUseCase
         }
 
         if (!$this->orchestrator->handle($saga, $order, $message->type, $message->payload, $this->clock->now())) {
+            if ($this->orchestrator->isAhead($saga, $message->type)) {
+                throw new RetryLaterException("{$message->type} chegou antes de a saga entrar no passo dele (está em {$saga->getStep()}).");
+            }
+
             // Fora de hora, repetido por outro caminho, ou de saga encerrada (§5.4).
             return self::OUTCOME_IGNORED;
         }

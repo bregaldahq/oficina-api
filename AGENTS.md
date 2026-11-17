@@ -111,6 +111,7 @@ orquestrador trata; tipo novo entra lá, no orquestrador e no catálogo, juntos.
 | Deploy aplica a imagem errada ou nenhum TG | Placeholder de `deploy/base/` trocado por valor | `bin/check-contracts.py` (DEPLOY-1) |
 | Deploy volta `forbidden` | CRD nova sem RBAC no `oficina-infra-cluster` | `bin/check-contracts.py` (RBAC-1) |
 | Saga parada sem motivo aparente | Comando publicado fora da outbox, ou estado salvo sem passar pelo `SagaCommit` | `SagaFlowTest`, BDD e `bin/ws e2e --fase4` |
+| Atualização da OS perdida em silêncio | A OS não tem versão própria: quem garante a concorrência é a versão da saga, gravada junto. Use case novo que grave a OS **sem** a saga não tem essa proteção (hoje só a entrega faz isso, e só depois de a saga terminar) | revisão; grave pela saga (`SagaCommit`) ou acrescente versão à OS |
 | Evento de outro serviço ignorado | Tipo fora de `local.consumed_message_types` (`infra/locals.tf`) ou fora do passo atual | o e2e da Fase 4 (a fila filtra de verdade no LocalStack) |
 | Agente New Relic inerte e ninguém percebe | Base Alpine (sem glibc) ou license key trocada sem rollout | `pr.yml` (imagem) e o smoke de observabilidade do `deploy.yml` |
 
