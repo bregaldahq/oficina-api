@@ -280,8 +280,8 @@ Os três últimos são **compensações**.
 | `budget.cancelled` | faturamento → os | `budget_id` |
 | `payment.created` | faturamento → os | `payment_id`, `payment_url` |
 | `payment.confirmed` | faturamento → os | `payment_id`, `amount` |
-| `payment.failed` | faturamento → os | `payment_id`, `reason` |
-| `payment.refunded` | faturamento → os | `payment_id` |
+| `payment.failed` | faturamento → os | `payment_id`, `reason` (o `status_detail` do Mercado Pago) |
+| `payment.refunded` | faturamento → os | `payment_id` (`null` quando não havia pagamento confirmado para estornar) |
 
 Todo tipo publicado tem pelo menos um consumidor, e todo tipo consumido tem produtor. O
 `bin/check-contracts.py` do repositório principal vai conferir isso contra esta seção.
@@ -301,6 +301,17 @@ Todo tipo publicado tem pelo menos um consumidor, e todo tipo consumido tem prod
   `diagnosis.completed` chegar antes de `diagnosis.started`, ou `payment.confirmed` antes de
   `payment.created`, o orquestrador aplica as duas transições em sequência. O evento
   intermediário, quando chegar, é ignorado.
+- **Valores no JSON.** `total_amount` e `amount` são números em reais com duas casas; um valor
+  inteiro chega sem a parte decimal (`558`, não `558.00`). Quem consome compara como número.
+- **Todo pagamento aprovado faz a OS avançar ou é estornado; nunca fica parado.** O Faturamento
+  aceita o primeiro pagamento que serve (orçamento aprovado, valor igual ao total). Uma nova
+  tentativa depois de uma recusa também serve: no Checkout Pro o cliente tenta de novo no mesmo
+  link. Qualquer outro pagamento aprovado volta, com a chave de estorno `late-<id do pagamento>`:
+  valor diferente do total (e a cobrança fica recusada, com `payment.failed` e motivo
+  `AMOUNT_MISMATCH`), pagamento em dobro (só no log; a OS não precisa saber) e pagamento depois
+  do cancelamento (abaixo).
+- **Estorno feito por fora** (painel do Mercado Pago, chargeback) sobre o pagamento aceito é
+  registrado e publicado como `payment.refunded`.
 - **Pagamento de orçamento cancelado é estornado pelo Faturamento.** Se a confirmação de um
   pagamento chegar para um orçamento já cancelado (o cliente pagou depois do prazo, ou a
   confirmação cruzou com o cancelamento), o Faturamento estorna por conta própria e publica
@@ -363,6 +374,10 @@ Aplicada a cada falha:
   já encerrada, com falha ou reparada) é respondido com o evento de confirmação, sem efeito. A
   confirmação diz "não há mais nada a desfazer aqui", não "foi desfeito".
 - Pagamento que chega depois do cancelamento é estornado pelo próprio Faturamento (§5.4).
+- **`billing.cancel-budget` de um orçamento já pago também estorna** (e publica
+  `payment.refunded` antes de `budget.cancelled`). É o caso do prazo de pagamento que vence na
+  saga enquanto a confirmação está a caminho: as peças voltam e o dinheiro também. Se a saga já
+  pediu `billing.refund-payment`, o estorno é um só.
 
 ### 6.3 Prazos
 
