@@ -88,7 +88,7 @@ Compensação sem confirmação é reenviada com espera crescente; esgotadas as 
 
 ### Qualidade
 
-- **233 testes, 92,0% das linhas de todo o `src/`** (medido em 2026-11-16), com mínimo de 80%
+- **237 testes, 92,2% das linhas de todo o `src/`** (medido em 2026-11-16), com mínimo de 80%
   exigido no `pr.yml` e de novo antes do deploy.
 - **BDD da saga** em [`features/saga.feature`](features/saga.feature) (Behat): fluxo completo,
   reparo que falha e é estornado, orçamento recusado, prazo vencido, compensação que nunca
@@ -591,11 +591,11 @@ Pontos de integração que valem a leitura antes do primeiro deploy:
 | Workflow | Gatilho | O que faz |
 |---|---|---|
 | [`pr.yml`](.github/workflows/pr.yml) | PR para `develop` ou `main` | PHP-CS-Fixer, PHPUnit e PHPStan nível 8 |
-| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; push em `main` → `producao` | OIDC → build → ECR → `kubectl apply -k` → Job de migration → smoke test → marca o deployment no New Relic |
+| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; push em `main` → `producao` | OIDC → `infra/` → build → ECR → configuração → Job de migration → Deployments (`kubectl apply -k`) → smoke test → marca o deployment no New Relic |
 
 Autenticação na AWS por **OIDC** (`aws-actions/configure-aws-credentials@v4` com
 `role-to-assume` e `permissions: id-token: write`). **Não existe access key estática** em nenhum
-dos quatro repositórios.
+dos seis repositórios.
 
 Secrets de repositório esperados: `AWS_ROLE_ARN`, `AWS_ACCOUNT_ID`, `NEW_RELIC_LICENSE_KEY`,
 `NEW_RELIC_ACCOUNT_ID`, `NEW_RELIC_API_KEY`, `TF_STATE_BUCKET`.
@@ -612,7 +612,7 @@ scripts/php.sh vendor/bin/php-cs-fixer fix --diff    # PSR-12
 
 Ou, com o ambiente do Compose no ar: `make test`, `make analyse`, `make lint`, `make coverage`.
 
-**Estado da suíte (Fase 4): 225 testes, 91,8% de cobertura das linhas de todo o `src/`, 6
+**Estado da suíte (Fase 4): 237 testes, 92,2% de cobertura das linhas de todo o `src/`, 6
 cenários de BDD, PHPStan nível 8 limpo.** `scripts/php.sh vendor/bin/behat` roda o BDD.
 
 Os testes de integração e o BDD usam os repositórios PDO de produção sobre SQLite em memória
