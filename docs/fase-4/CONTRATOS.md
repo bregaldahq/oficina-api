@@ -434,6 +434,20 @@ isso a Lambda deixa de usar o segredo `oficina/<env>/db`, os parâmetros `/ofici
 e o SG `db-client`. Os códigos de erro do `POST /auth/cpf` não mudam; OS indisponível responde
 `503`.
 
+> **Adendo F4-3 (`auth-cpf` pela rota interna).** A tabela de códigos do `POST /auth/cpf` (Fase 3)
+> ganha uma linha:
+>
+> | Situação | Status | Corpo |
+> |---|---|---|
+> | Serviço de OS sem resposta ou com `5xx` | 503 | `{"error":"Serviço temporariamente indisponível. Tente novamente."}` |
+>
+> Na rota interna, só o `404` com corpo `{"error":"Cliente não encontrado."}` quer dizer CPF não
+> cadastrado. Outro `404` (o `{"error":"Rota não encontrada."}` de um OS sem a rota) e o `401` de
+> `X-Internal-Token` recusado são defeito de implantação: a Lambda responde `500`, para que o
+> smoke do deploy (que aceita `404`) não passe verde com a Lambda chamando um OS antigo. O corpo
+> do `404` de cliente é contrato entre o `InternalCustomerController` do OS e o
+> `HttpCustomerRepository` do `oficina-gateway-auth`.
+
 Rede: hoje é o SG `db-client` que dá à Lambda acesso ao endpoint do Secrets Manager, e ele não
 tem saída para a porta 80. Por isso a Lambda ganha um SG próprio e o SG do endpoint passa a
 aceitar o CIDR da VPC (§1). O acesso ao segredo continua restrito pelo IAM.

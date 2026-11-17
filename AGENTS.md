@@ -98,8 +98,8 @@ orquestrador trata; tipo novo entra lá, no orquestrador e no catálogo, juntos.
 - Cobertura: `scripts/php.sh sh -c 'vendor/bin/phpunit --coverage-clover coverage.xml && php
   bin/check-coverage.php coverage.xml 80'` (todo o `src/`). BDD: `scripts/php.sh vendor/bin/behat`.
 - A saga contra os outros dois serviços de verdade: `bin/ws e2e --fase4`, no repositório principal.
-- `src/Infrastructure/Database/schema.sql` é legado e nada o referencia. O schema de verdade são
-  as migrations do `oficina-infra-fundacao`.
+- O schema de verdade são as migrations do `oficina-infra-fundacao`. Catálogo, estoque e itens
+  da OS saíram do banco do OS na migration `005` (estão no Faturamento): não volte a lê-los.
 
 ## Armadilhas
 
@@ -125,8 +125,11 @@ orquestrador trata; tipo novo entra lá, no orquestrador e no catálogo, juntos.
 - a coleção Postman.
 
 `docs/fase-4/` tem o **desenho** da Fase 4 (três microsserviços, saga orquestrada, mensageria):
-`CONTRATOS.md` (adendos ao da Fase 3), as ADRs 011 a 017 e os diagramas. Ainda não está
-implementado: enquanto um item de lá não entrar em `develop`, vale o contrato da Fase 3.
+`CONTRATOS.md` (adendos ao da Fase 3), as ADRs 011 a 017 e os diagramas. Está implementado
+nos seis repos; cada item só vale em um ambiente depois de entrar em `develop` (hml) ou `main`
+(prod). Até lá, vale o contrato da Fase 3. A rota `GET /internal/customers/by-document/{document}`
+é chamada pela Lambda `auth-cpf` (§7): resposta e códigos de erro dela são contrato com o
+`HttpCustomerRepository` do `oficina-gateway-auth`.
 
 `docs/DOMAIN-STORYTELLING.md` descreve os fluxos de negócio.
 
