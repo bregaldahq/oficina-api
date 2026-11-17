@@ -55,10 +55,9 @@ class RequestValidator
         return (int)$body[$field];
     }
 
+    /** Lança em vez de encerrar o processo: o index.php responde, e os testes conseguem chegar aqui. */
     private static function abort(int $code, string $message): never
     {
-        http_response_code($code);
-        echo json_encode(['error' => $message]);
-        exit;
+        throw new RequestValidationException($message, $code);
     }
 }

@@ -19,6 +19,10 @@ configMapGenerator:
       - APP_ENV=homologacao
       - APP_DEBUG=false
       - NEW_RELIC_APP_NAME=oficina-api-hml
+      # prazos curtos em hml, para a demonstração (docs/fase-4/CONTRATOS.md §6.3)
+      - SAGA_APPROVAL_TIMEOUT_SECONDS=600
+      - SAGA_PAYMENT_TIMEOUT_SECONDS=600
+      - SAGA_WORK_ALERT_SECONDS=1800
 
 generatorOptions:
   disableNameSuffixHash: true

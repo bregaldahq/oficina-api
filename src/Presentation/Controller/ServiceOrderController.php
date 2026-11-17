@@ -4,32 +4,32 @@ declare(strict_types=1);
 
 namespace App\Presentation\Controller;
 
-use App\Application\DTO\ServiceOrder\AddItemsInputDTO;
-use App\Application\DTO\ServiceOrder\ChangeStatusDTO;
 use App\Application\DTO\ServiceOrder\CreateServiceOrderInputDTO;
-use App\Application\DTO\ServiceOrder\ReviewBudgetDTO;
-use App\Application\UseCase\ServiceOrder\AddItemsToServiceOrderUseCase;
-use App\Application\UseCase\ServiceOrder\ChangeServiceOrderStatusUseCase;
+use App\Application\UseCase\ServiceOrder\CancelServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\CreateServiceOrderUseCase;
+use App\Application\UseCase\ServiceOrder\DeliverServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\GetServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\ListServiceOrdersByCustomerUseCase;
 use App\Application\UseCase\ServiceOrder\ListServiceOrdersUseCase;
-use App\Application\UseCase\ServiceOrder\ReviewBudgetUseCase;
+use App\Domain\Exception\ConcurrencyException;
 use App\Domain\Exception\DomainException;
-use App\Domain\Exception\InsufficientStockException;
-use App\Domain\Exception\InvalidStatusTransitionException;
 use App\Domain\Exception\NotFoundException;
 
+/**
+ * Ordens de serviço (docs/fase-4/CONTRATOS.md §4, no oficina-api). Na Fase 4 o status é movido
+ * pela saga: daqui saem só a abertura (que inicia a saga), a entrega e o cancelamento.
+ */
 class ServiceOrderController
 {
     public function __construct(
         private readonly CreateServiceOrderUseCase $createUseCase,
-        private readonly AddItemsToServiceOrderUseCase $addItemsUseCase,
         private readonly GetServiceOrderUseCase $getUseCase,
-        private readonly ChangeServiceOrderStatusUseCase $changeStatusUseCase,
         private readonly ListServiceOrdersByCustomerUseCase $listByCustomerUseCase,
         private readonly ListServiceOrdersUseCase $listUseCase,
-        private readonly ReviewBudgetUseCase $reviewBudgetUseCase,
+        private readonly ?CancelServiceOrderUseCase $cancelUseCase = null,
+        private readonly ?DeliverServiceOrderUseCase $deliverUseCase = null,
+        /** Quem lê o corpo; os testes passam um, em produção é php://input. */
+        private readonly ?\Closure $bodyReader = null,
     ) {
     }
 
@@ -59,7 +59,7 @@ class ServiceOrderController
             }
 
             http_response_code(200);
-            echo json_encode($order->toArray());
+            echo json_encode($order->toArray() + ['saga' => $this->getUseCase->saga($order->getId())]);
         } catch (NotFoundException $e) {
             http_response_code(404);
             echo json_encode(['error' => $e->getMessage()]);
@@ -67,9 +67,6 @@ class ServiceOrderController
     }
 
     /**
-     * GET /api/service-orders/me — orders of the authenticated subject.
-     * The customer id always comes from the `sub` claim, never from user input.
-     *
      * @param array<string, string> $params
      * @param array<string, mixed>  $claims
      */
@@ -87,7 +84,8 @@ class ServiceOrderController
         echo json_encode($this->listByCustomerUseCase->execute($customerId));
     }
 
-    public function store(): void
+    /** Abre a OS e inicia a saga dela. */
+    public function store(string $correlationId = ''): void
     {
         $body = $this->parseBody();
 
@@ -97,141 +95,69 @@ class ServiceOrderController
             return;
         }
 
-        try {
+        $this->respond(function () use ($body, $correlationId): array {
             $order = $this->createUseCase->execute(new CreateServiceOrderInputDTO(
-                customerId: $body['customer_id'],
-                vehicleId: $body['vehicle_id'],
-            ));
+                customerId: (string)$body['customer_id'],
+                vehicleId: (string)$body['vehicle_id'],
+                description: is_string($body['description'] ?? null) ? $body['description'] : '',
+            ), $correlationId);
 
-            http_response_code(201);
-            echo json_encode($order->toArray());
-        } catch (NotFoundException $e) {
-            http_response_code(404);
-            echo json_encode(['error' => $e->getMessage()]);
-        } catch (DomainException $e) {
-            http_response_code(422);
-            echo json_encode(['error' => $e->getMessage()]);
-        }
+            return $order->toArray() + ['saga' => $this->getUseCase->saga($order->getId())];
+        }, 201);
     }
 
     /** @param array<string, string> $params */
-    public function addItems(array $params): void
+    public function deliver(array $params): void
     {
-        $body = $this->parseBody();
-
-        try {
-            $order = $this->addItemsUseCase->execute(new AddItemsInputDTO(
-                orderId: $params['id'],
-                serviceItemIds: $body['service_item_ids'] ?? [],
-                parts: $body['parts']                     ?? [],
-            ));
-
-            http_response_code(200);
-            echo json_encode($order->toArray());
-        } catch (NotFoundException $e) {
-            http_response_code(404);
-            echo json_encode(['error' => $e->getMessage()]);
-        } catch (InsufficientStockException $e) {
-            http_response_code(422);
-            echo json_encode(['error' => $e->getMessage()]);
-        } catch (DomainException $e) {
-            http_response_code(422);
-            echo json_encode(['error' => $e->getMessage()]);
-        }
+        $this->respond(fn (): array => $this->deliverUseCase()->execute($params['id'])->toArray());
     }
 
     /** @param array<string, string> $params */
-    public function changeStatus(array $params): void
+    public function cancel(array $params): void
     {
         $body = $this->parseBody();
+        $this->respond(function () use ($params, $body): array {
+            $order = $this->cancelUseCase()->execute($params['id'], is_string($body['reason'] ?? null) ? $body['reason'] : '');
 
-        if (empty($body['status'])) {
-            http_response_code(400);
-            echo json_encode(['error' => 'status é obrigatório.']);
-            return;
-        }
+            return $order->toArray() + ['saga' => $this->getUseCase->saga($order->getId())];
+        });
+    }
 
+    /** @param callable(): array<string, mixed> $action */
+    private function respond(callable $action, int $success = 200): void
+    {
         try {
-            $order = $this->changeStatusUseCase->execute(new ChangeStatusDTO(
-                orderId: $params['id'],
-                newStatus: $body['status'],
-            ));
-
-            http_response_code(200);
-            echo json_encode($order->toArray());
+            $data = $action();
+            http_response_code($success);
+            echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         } catch (NotFoundException $e) {
             http_response_code(404);
             echo json_encode(['error' => $e->getMessage()]);
-        } catch (InvalidStatusTransitionException $e) {
-            http_response_code(422);
-            echo json_encode(['error' => $e->getMessage()]);
+        } catch (ConcurrencyException) {
+            http_response_code(409);
+            echo json_encode(['error' => 'A ordem de serviço mudou enquanto a operação corria. Tente de novo.']);
         } catch (DomainException $e) {
-            http_response_code(400);
+            http_response_code(422);
             echo json_encode(['error' => $e->getMessage()]);
         }
     }
 
-    /**
-     * Receives an external budget decision (approval/rejection) for the customer's order.
-     * Intended to be called by an outside approval channel; guarded by a shared webhook token.
-     *
-     * @param array<string, string> $params
-     */
-    public function reviewBudget(array $params): void
+    private function cancelUseCase(): CancelServiceOrderUseCase
     {
-        if (!$this->webhookAuthorized()) {
-            http_response_code(401);
-            echo json_encode(['error' => 'Token de webhook inválido.']);
-            return;
-        }
+        return $this->cancelUseCase ?? throw new \LogicException('Cancelamento não configurado.');
+    }
 
-        $body = $this->parseBody();
-
-        if (!array_key_exists('approved', $body) || !is_bool($body['approved'])) {
-            http_response_code(400);
-            echo json_encode(['error' => 'O campo "approved" (boolean) é obrigatório.']);
-            return;
-        }
-
-        try {
-            $order = $this->reviewBudgetUseCase->execute(new ReviewBudgetDTO(
-                orderId: $params['id'],
-                approved: $body['approved'],
-            ));
-
-            http_response_code(200);
-            echo json_encode($order->toArray());
-        } catch (NotFoundException $e) {
-            http_response_code(404);
-            echo json_encode(['error' => $e->getMessage()]);
-        } catch (InvalidStatusTransitionException $e) {
-            http_response_code(422);
-            echo json_encode(['error' => $e->getMessage()]);
-        }
+    private function deliverUseCase(): DeliverServiceOrderUseCase
+    {
+        return $this->deliverUseCase ?? throw new \LogicException('Entrega não configurada.');
     }
 
     /** @return array<string, mixed> */
     private function parseBody(): array
     {
-        $raw = file_get_contents('php://input');
-        return json_decode($raw ?: '{}', true) ?? [];
-    }
+        $raw  = $this->bodyReader !== null ? ($this->bodyReader)() : file_get_contents('php://input');
+        $data = json_decode($raw ?: '{}', true);
 
-    /**
-     * Validates the shared webhook token (WEBHOOK_TOKEN secret).
-     * The token is MANDATORY: with no token configured the endpoint is closed, never open —
-     * an unset secret used to leave the budget approval callable by anyone.
-     */
-    private function webhookAuthorized(): bool
-    {
-        $expected = $_ENV['WEBHOOK_TOKEN'] ?? '';
-
-        if (!is_string($expected) || $expected === '') {
-            return false;
-        }
-
-        $provided = $_SERVER['HTTP_X_WEBHOOK_TOKEN'] ?? '';
-
-        return is_string($provided) && hash_equals($expected, $provided);
+        return is_array($data) ? $data : [];
     }
 }

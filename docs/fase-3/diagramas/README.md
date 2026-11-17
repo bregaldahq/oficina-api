@@ -17,4 +17,4 @@ Diagramas complementares vivem onde pertencem:
 - **Domain Storytelling** dos dois fluxos de negócio —
   [`docs/DOMAIN-STORYTELLING.md`](../../DOMAIN-STORYTELLING.md).
 - **Relação entre as decisões arquiteturais** — [`adr/README.md`](../adr/README.md).
-- **Modelo de dados (ER)** — repositório `oficina-infra-database`.
+- **Modelo de dados (ER)** — repositório `oficina-infra-fundacao`.

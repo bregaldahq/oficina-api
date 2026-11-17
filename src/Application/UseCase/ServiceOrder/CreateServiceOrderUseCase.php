@@ -5,27 +5,33 @@ declare(strict_types=1);
 namespace App\Application\UseCase\ServiceOrder;
 
 use App\Application\DTO\ServiceOrder\CreateServiceOrderInputDTO;
+use App\Application\Port\ClockInterface;
+use App\Application\UseCase\Saga\SagaCommit;
 use App\Domain\Aggregate\ServiceOrder;
-use App\Domain\Event\EventDispatcherInterface;
 use App\Domain\Exception\DomainException;
 use App\Domain\Exception\NotFoundException;
 use App\Domain\Repository\CustomerRepositoryInterface;
-use App\Domain\Repository\ServiceOrderRepositoryInterface;
 use App\Domain\Repository\VehicleRepositoryInterface;
+use App\Domain\Saga\SagaOrchestrator;
 use App\Domain\UuidGeneratorInterface;
 
+/**
+ * Abre a OS e, na mesma transação, a saga dela, com o pedido de diagnóstico na outbox
+ * (docs/fase-4/CONTRATOS.md §6.1, no oficina-api).
+ */
 class CreateServiceOrderUseCase
 {
     public function __construct(
         private readonly CustomerRepositoryInterface $customerRepository,
         private readonly VehicleRepositoryInterface $vehicleRepository,
-        private readonly ServiceOrderRepositoryInterface $orderRepository,
         private readonly UuidGeneratorInterface $uuidGenerator,
-        private readonly EventDispatcherInterface $eventDispatcher,
+        private readonly SagaOrchestrator $orchestrator,
+        private readonly SagaCommit $commit,
+        private readonly ClockInterface $clock,
     ) {
     }
 
-    public function execute(CreateServiceOrderInputDTO $input): ServiceOrder
+    public function execute(CreateServiceOrderInputDTO $input, string $correlationId = ''): ServiceOrder
     {
         $customer = $this->customerRepository->findById($input->customerId);
         if ($customer === null) {
@@ -38,7 +44,7 @@ class CreateServiceOrderUseCase
         }
 
         if ($vehicle->getCustomerId() !== $input->customerId) {
-            throw new DomainException("O veículo não pertence ao cliente informado.");
+            throw new DomainException('O veículo não pertence ao cliente informado.');
         }
 
         $order = ServiceOrder::create(
@@ -46,14 +52,9 @@ class CreateServiceOrderUseCase
             customer: $customer,
             vehicle: $vehicle,
         );
+        $saga = $this->orchestrator->start($this->uuidGenerator->generate(), $order, $correlationId, $input->description, $this->clock->now());
 
-        $this->orderRepository->save($order);
-
-        // Sem isto o ServiceOrderCreatedEvent fica registrado no agregado e nunca e'
-        // publicado: nao vira custom event no New Relic, e o StatusHistorySubscriber
-        // nao grava a linha inicial do historico. Os paineis de volume diario, OS
-        // abertas e clientes atendidos ficam zerados sem que nada falhe.
-        $this->eventDispatcher->dispatchAll($order->releaseEvents());
+        ($this->commit)($saga, $order);
 
         return $order;
     }

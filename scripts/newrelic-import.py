@@ -42,7 +42,10 @@ NERDGRAPH = {
     "us": "https://api.newrelic.com/graphql",
     "eu": "https://api.eu.newrelic.com/graphql",
 }
-BASE = pathlib.Path(__file__).resolve().parent.parent / "docs" / "fase-3" / "newrelic"
+DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
+BASE = DOCS / "fase-3" / "newrelic"
+# Fase 4: o dashboard e os alertas da saga (docs/fase-4/CONTRATOS.md §8).
+BASE_F4 = DOCS / "fase-4" / "newrelic"
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -106,11 +109,14 @@ def buscar_entidades(env: str, api_key: str, region: str) -> list[dict]:
 
 # O projeto carrega DUAS nomenclaturas de ambiente, e elas nao coincidem:
 #   - infraestrutura (Terraform, SSM, nomes de recurso): hml / prod
-#   - runtime da aplicacao (APP_ENV, definido pelo overlay):  homologacao / producao
+#   - runtime da aplicacao (APP_ENV, definido pelo overlay):  homologacao / production
 #
 # O atributo `env` dos custom events vem do APP_ENV. Filtrar por 'hml' nas NRQL
-# devolve zero, mesmo com os eventos chegando — o painel fica vazio sem erro.
-APP_ENV = {"hml": "homologacao", "prod": "producao"}
+# devolve zero, mesmo com os eventos chegando — o painel fica vazio sem erro. O valor
+# de prod e' "production" (deploy/overlays/prod e o bin/migrate.php, que pula o seed
+# de demonstracao com ele); ate a Fase 4 este mapa dizia "producao", e os paineis de
+# prod ficavam vazios.
+APP_ENV = {"hml": "homologacao", "prod": "production"}
 
 
 def retarget(obj, env: str, account_id: int, endpoint: str):
@@ -125,7 +131,8 @@ def retarget(obj, env: str, account_id: int, endpoint: str):
     if isinstance(obj, str):
         s = obj
         # appName = 'oficina-api-prod'  ->  '...-<env>'
-        s = s.replace("oficina-api-prod", f"oficina-api-{env}")
+        # (os tres servicos da Fase 4: oficina-api, oficina-faturamento, oficina-execucao)
+        s = re.sub(r"(oficina-(?:api|faturamento|execucao))-prod", rf"\g<1>-{env}", s)
         # recursos AWS: oficina-prod-api, oficina-prod-auth-cpf, ...
         s = re.sub(r"oficina-prod-", f"oficina-{env}-", s)
         # atributo dos custom events e dos logs: usa o valor de APP_ENV, nao o da infra
@@ -140,8 +147,8 @@ def retarget(obj, env: str, account_id: int, endpoint: str):
     return obj
 
 
-def load(name: str, env: str, account_id: int, endpoint: str):
-    raw = json.loads((BASE / name).read_text(encoding="utf-8"))
+def load(name: str | pathlib.Path, env: str, account_id: int, endpoint: str):
+    raw = json.loads((BASE / name).read_text(encoding="utf-8"))  # caminho absoluto ignora o BASE
     return retarget(raw, env, account_id, endpoint)
 
 
@@ -232,7 +239,7 @@ def buscar_por_nome(tipo: str, nome: str, acct: int, key: str, region: str) -> l
     return [e for e in achadas if e["name"] == nome]
 
 
-def create_dashboard(path: str, env, acct, endpoint, key, dry, region="us") -> str | None:
+def create_dashboard(path: str | pathlib.Path, env, acct, endpoint, key, dry, region="us") -> str | None:
     dash = load(path, env, acct, endpoint)
     dash["name"] = f"{dash['name']} · {env}"
     dash.pop("permissions", None) or dash.setdefault("permissions", "PUBLIC_READ_WRITE")
@@ -265,8 +272,8 @@ def create_dashboard(path: str, env, acct, endpoint, key, dry, region="us") -> s
     return guid
 
 
-def create_alerts(env, acct, endpoint, key, dry, region="us") -> None:
-    doc = load("alertas.json", env, acct, endpoint)
+def create_alerts(env, acct, endpoint, key, dry, region="us", path: str | pathlib.Path = "alertas.json") -> None:
+    doc = load(path, env, acct, endpoint)
 
     policy_in = {
         "name": doc["policy"]["name"],
@@ -388,9 +395,11 @@ def main() -> None:
     print("Dashboards:")
     create_dashboard("dashboard-negocio.json", args.env, acct_i, args.endpoint, key, args.dry_run, args.region)
     create_dashboard("dashboard-plataforma.json", args.env, acct_i, args.endpoint, key, args.dry_run, args.region)
+    create_dashboard(BASE_F4 / "dashboard-saga.json", args.env, acct_i, args.endpoint, key, args.dry_run, args.region)
 
     print("\nAlertas:")
     create_alerts(args.env, acct_i, args.endpoint, key, args.dry_run, args.region)
+    create_alerts(args.env, acct_i, args.endpoint, key, args.dry_run, args.region, BASE_F4 / "alertas-saga.json")
 
     if not args.skip_synthetic:
         print("\nSynthetic:")

@@ -22,7 +22,7 @@ custom events `ServiceOrderCreated` e `ServiceOrderStatusChanged`, e log estrutu
 4. **License key** (`...NRAL`) para o agente — vai nos secrets de repositório
    (`NEW_RELIC_LICENSE_KEY`) e é consumida pelo `nri-bundle` e pelo agente PHP.
 5. Telemetria já chegando: a aplicação com o agente PHP (`NEW_RELIC_APP_NAME=oficina-api-prod`),
-   o `nri-bundle` instalado pelo `oficina-infra-k8s` e o Firehose de logs do `oficina-lambda-auth`
+   o `nri-bundle` instalado pelo `oficina-infra-cluster` e o Firehose de logs do `oficina-gateway-auth`
    (as Lambdas rodam numa VPC sem NAT, então a extensão do New Relic não alcança a internet;
    os logs saem pelo CloudWatch → Kinesis Firehose → New Relic).
 
@@ -174,5 +174,5 @@ Cada item abaixo foi conferido contra dado real da conta, não contra a document
 | **Lead time** | `average(orderAgeSeconds)` na transição para `DELIVERED` (Adendo 6 dos Contratos). |
 | **Funil** | Começa em `ServiceOrderCreated`, com os dois eventos no mesmo `FROM`. Sem isso, o funil começava no diagnóstico e não mostrava quantas OS abertas chegaram lá. |
 | **`durationSeconds` em `ServiceOrderCreated`** | Não existe, e está correto: `RECEIVED` é o primeiro estado, não há transição anterior. O painel de tempo por status filtra `fromStatus IS NOT NULL` por causa disso. |
-| **Lambdas e gateway** | Consultam `Log`, não `AwsLambdaInvocation`. As Lambdas estão numa VPC sem NAT, então nenhum agente dentro delas alcança o New Relic. Os logs saem pelo Firehose do `oficina-lambda-auth`. Invocações, duração e cold start vêm da linha `REPORT` que a AWS escreve a cada invocação (`Init Duration` só aparece no cold start). Erros vêm do log estruturado das funções (`level = 'error'`) e das linhas de timeout ou de runtime encerrado. |
+| **Lambdas e gateway** | Consultam `Log`, não `AwsLambdaInvocation`. As Lambdas estão numa VPC sem NAT, então nenhum agente dentro delas alcança o New Relic. Os logs saem pelo Firehose do `oficina-gateway-auth`. Invocações, duração e cold start vêm da linha `REPORT` que a AWS escreve a cada invocação (`Init Duration` só aparece no cold start). Erros vêm do log estruturado das funções (`level = 'error'`) e das linhas de timeout ou de runtime encerrado. |
 | **Access log do gateway** | Os campos são `status` e `route`, conforme o `format` do stage em `apigateway.tf`. |

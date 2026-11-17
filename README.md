@@ -1,13 +1,127 @@
 # Oficina Mecânica API
 
-[![CI/CD](https://github.com/bregaldahq/oficina-mecanica-tech-challenge/actions/workflows/ci-cd.yml/badge.svg?branch=main)](https://github.com/bregaldahq/oficina-mecanica-tech-challenge/actions/workflows/ci-cd.yml)
+[![Deploy](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml)
+[![PR](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml/badge.svg?branch=develop)](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=bregaldahq_oficina-api&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=bregaldahq_oficina-api)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=bregaldahq_oficina-api&metric=coverage)](https://sonarcloud.io/component_measures?id=bregaldahq_oficina-api&metric=coverage)
 [![PHP](https://img.shields.io/badge/PHP-8.2-blue?logo=php)](https://php.net)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0-orange?logo=mysql)](https://mysql.com)
 [![PHPUnit](https://img.shields.io/badge/Tests-PHPUnit%2011-green)](https://phpunit.de)
 [![OpenAPI](https://img.shields.io/badge/Docs-OpenAPI%203.0-brightgreen)](swagger.yaml)
 [![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)](Dockerfile)
 
+> Parte do sistema **Oficina Mecânica**. Comece pelo repositório principal, [`oficina-mecanica`](https://github.com/bregaldahq/oficina-mecanica): visão geral, mapa dos repositórios e regras para mudanças entre eles.
+>
+> [`oficina-infra-fundacao`](https://github.com/bregaldahq/oficina-infra-fundacao) → [`oficina-infra-cluster`](https://github.com/bregaldahq/oficina-infra-cluster) → [`oficina-gateway-auth`](https://github.com/bregaldahq/oficina-gateway-auth) → **`oficina-api`**
+
 API REST cloud-native em **PHP 8.2 puro** (sem frameworks MVC) para gerenciar o ciclo completo de atendimento de uma oficina mecânica. O projeto foi desenvolvido como **Tech Challenge** da pós-graduação SOAT (Software Architecture) e demonstra, na prática, DDD, Clean Architecture, TDD, observabilidade de saúde e automação de infraestrutura e entrega.
+
+---
+
+## Fase 4 — Microsserviços e saga
+
+Na Fase 4 este repositório virou o **serviço de OS** e o **orquestrador da saga**. O sistema
+passou a ter três microsserviços, cada um com repositório, banco, infraestrutura e pipeline
+próprios:
+
+| Serviço | Repositório | Banco | Responsável por |
+|---|---|---|---|
+| **OS** | `oficina-api` (este) | MySQL (RDS da fundação) | clientes, veículos, a ordem de serviço, o login do admin e a **saga** |
+| **Faturamento** | [`oficina-faturamento`](https://github.com/bregaldahq/oficina-faturamento) | MySQL próprio | catálogo, estoque, orçamento, aprovação, pagamento pelo Mercado Pago, estorno |
+| **Execução** | [`oficina-execucao`](https://github.com/bregaldahq/oficina-execucao) | DynamoDB | fila da oficina, diagnóstico e reparo |
+
+Os serviços não se chamam por HTTP nem leem o banco um do outro: conversam por **mensagens**
+(um tópico SNS, uma fila SQS com DLQ por serviço). O contrato entre eles está em
+[`docs/fase-4/CONTRATOS.md`](docs/fase-4/CONTRATOS.md); as decisões, nas
+[ADRs 011 a 017](docs/fase-4/adr/README.md); os diagramas, em
+[`docs/fase-4/diagramas/`](docs/fase-4/diagramas/).
+
+### A saga e por que ela é orquestrada
+
+Abrir uma OS inicia uma saga que atravessa os três serviços:
+
+```
+abrir a OS ─► diagnóstico (Execução) ─► orçamento com peças reservadas (Faturamento)
+          ─► aprovação do cliente ─► pagamento (Mercado Pago) ─► reparo (Execução) ─► FINISHED
+```
+
+Cada passo tem a sua compensação. Se algo falha, a saga desfaz o que já foi feito, do mais
+recente para o mais antigo: estorna o pagamento, cancela o orçamento (as peças voltam ao
+estoque) e cancela a tarefa da oficina. A OS vai para `CANCELLED` (ou `REJECTED`) na hora, e a
+saga fica em `COMPENSATING` até cada compensação ser confirmada.
+
+**Escolhemos orquestração, e não coreografia** ([ADR-012](docs/fase-4/adr/012-saga-orquestrada-no-servico-de-os.md)):
+
+- **O fluxo é linear e longo, com espera humana** (aprovação do cliente, pagamento) e prazos.
+  Com um orquestrador, a ordem dos passos, os prazos e as compensações ficam num arquivo só
+  ([`src/Domain/Saga/SagaOrchestrator.php`](src/Domain/Saga/SagaOrchestrator.php)), testado em
+  BDD; na coreografia ficariam espalhados por três repositórios, e o prazo de aprovação não teria
+  dono.
+- **O orquestrador mora no serviço de OS** porque tudo o que a saga faz muda o status da OS. O
+  estado da saga (tabela `sagas`) e o status da OS mudam na **mesma transação**, junto com o
+  comando seguinte na outbox ([ADR-017](docs/fase-4/adr/017-outbox-inbox-e-idempotencia.md)).
+- **O custo** é o serviço de OS conhecer os comandos dos outros dois. Ele conhece só o contrato
+  das mensagens, nunca o banco nem a API deles.
+
+| Falha | O que a saga desfaz | Status final da OS |
+|---|---|---|
+| diagnóstico sem conserto | nada (a Execução já encerrou a tarefa) | `CANCELLED` |
+| orçamento não gerado (sem estoque, item inexistente) | cancela a tarefa | `CANCELLED` |
+| cliente recusa o orçamento | cancela a tarefa (o Faturamento já liberou as peças) | `REJECTED` |
+| prazo de aprovação ou de pagamento vencido, pagamento recusado | cancela o orçamento e a tarefa | `CANCELLED` |
+| reparo falha depois do pagamento | **estorna o pagamento** e cancela o orçamento | `CANCELLED` |
+| admin cancela | o que já existe naquele passo | `CANCELLED` |
+
+Compensação sem confirmação é reenviada com espera crescente; esgotadas as tentativas, a saga fica
+`FAILED` e gera alerta (`saga.failed`). Passo parado com o mecânico além do prazo gera
+`saga.stalled`.
+
+### Rodando a saga
+
+- **API:** abre a OS (`POST /api/service-orders`), cancela (`POST .../cancellation`), entrega
+  (`POST .../delivery`) e mostra o andamento da saga em `GET /api/service-orders/{id}`.
+- **Worker** ([`bin/worker.php`](bin/worker.php), Deployment `oficina-api-worker`): publica a
+  outbox, consome a fila da saga e varre os prazos.
+- **Ponta a ponta local, sem AWS:** `bin/ws e2e --fase4`, no repositório principal, sobe os três
+  serviços com os bancos deles e um LocalStack (SNS, SQS, DynamoDB) e percorre a saga inteira,
+  inclusive a compensação de um reparo que falha e o cancelamento pelo admin.
+
+### Qualidade
+
+- **237 testes, 92,2% das linhas de todo o `src/`** (medido em 2026-11-16), com mínimo de 80%
+  exigido no `pr.yml` e de novo antes do deploy.
+- **BDD da saga** em [`features/saga.feature`](features/saga.feature) (Behat): fluxo completo,
+  reparo que falha e é estornado, orçamento recusado, prazo vencido, compensação que nunca
+  confirma e evento repetido ou fora de hora.
+- PHPStan nível 8, PSR-12 e SonarCloud com quality gate no `pr.yml`.
+
+### Evidências
+
+- **Cobertura por PR:** cada run do [`pr.yml`](https://github.com/bregaldahq/oficina-api/actions/workflows/pr.yml)
+  escreve a linha de cobertura no resumo do run e guarda o `coverage.xml` como artefato
+  (`cobertura`); abaixo de 80% o job falha.
+- **Qualidade:** [SonarCloud](https://sonarcloud.io/summary/new_code?id=bregaldahq_oficina-api), com o
+  quality gate como checagem obrigatória do PR.
+- **Deploy:** cada run do [`deploy.yml`](https://github.com/bregaldahq/oficina-api/actions/workflows/deploy.yml)
+  roda os testes antes, faz o smoke depois e marca o deploy no New Relic.
+
+### Observabilidade da saga
+
+New Relic, como na Fase 3, mais o que a Fase 4 pede (§8 do contrato):
+
+- **Trace pela fila:** quem publica grava o trace no envelope (`trace.newrelic`), e o worker de
+  cada serviço abre uma transação por mensagem que continua esse trace. Uma OS aparece no
+  *distributed tracing* do New Relic da API do OS até o worker da Execução e do Faturamento.
+- **Eventos da saga:** `SagaStarted`, `SagaStepCompleted` (com o tempo do passo),
+  `SagaCompensated`, `SagaFailed` e, no Faturamento, `PaymentConfirmed`.
+- **Dashboard "Saga"** ([`docs/fase-4/newrelic/dashboard-saga.json`](docs/fase-4/newrelic/dashboard-saga.json)):
+  funil por passo, tempo por passo, compensações por motivo, mensagens por serviço e resultado,
+  DLQs e sagas paradas.
+- **Alertas** ([`docs/fase-4/newrelic/alertas-saga.json`](docs/fase-4/newrelic/alertas-saga.json)):
+  mensagem na DLQ, saga `FAILED`, saga parada além do prazo, taxa de compensação, erro no
+  webhook do Mercado Pago e worker falhando.
+- Importados com `scripts/newrelic-import.py`, junto com os da Fase 3
+  ([`docs/fase-4/newrelic/README.md`](docs/fase-4/newrelic/README.md)).
 
 ---
 
@@ -78,17 +192,21 @@ A divisão segue o **ciclo de vida** dos recursos, não as camadas técnicas (AD
 
 | Repositório | Possui | Muda |
 |---|---|---|
-| `oficina-infra-database` | VPC, subnets, RDS, **todos os segredos**, migrations | raríssimo |
-| `oficina-infra-k8s` | EKS, node group, add-ons, ECR, NLB interno + target group | ocasional |
-| `oficina-lambda-auth` | Lambdas `auth-cpf` e `jwt-authorizer`, API Gateway, VPC Link | ocasional |
-| **`oficina-mecanica-tech-challenge`** (este) | aplicação, `deploy/` em kustomize, Job de migration | diário |
+| [`oficina-infra-fundacao`](https://github.com/bregaldahq/oficina-infra-fundacao) | VPC, subnets, RDS, **todos os segredos**, migrations | raríssimo |
+| [`oficina-infra-cluster`](https://github.com/bregaldahq/oficina-infra-cluster) | EKS, node group, add-ons, ECR, NLB interno + target group | ocasional |
+| [`oficina-gateway-auth`](https://github.com/bregaldahq/oficina-gateway-auth) | Lambdas `auth-cpf` e `jwt-authorizer`, API Gateway, VPC Link | ocasional |
+| **`oficina-api`** (este) | aplicação, `deploy/` em kustomize, Job de migration | diário |
+
+O mapa completo do sistema, as convenções comuns e as ferramentas para operar os quatro juntos
+ficam no repositório principal, [`oficina-mecanica`](https://github.com/bregaldahq/oficina-mecanica).
 
 O acoplamento entre eles é **exclusivamente por SSM Parameter Store** — nenhum usa
 `terraform_remote_state` (ADR-008). O repositório de banco é a **camada de fundação**: possui tudo
 que é durável, de modo que o cluster pode ser destruído e recriado sem risco ao dado nem aos
 tokens em circulação (ADR-009).
 
-Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: inversa.
+Ordem de `apply`: **fundação → cluster → gateway → api**. Ordem de `destroy`: inversa. Na Fase 4, o
+`infra/` deste repo sai pelo `destroy.yml` (manual, digitando o ambiente), antes do cluster.
 
 ### Arquitetura provisionada
 
@@ -204,26 +322,27 @@ O domínio não tem nenhuma dependência externa, não conhece PDO, HTTP ou JWT.
 ### Fluxo da Ordem de Serviço (State Machine)
 
 ```
-  RECEIVED ──► DIAGNOSIS ──► AWAITING_APPROVAL ──► EXECUTING ──► FINISHED ──► DELIVERED
-     │              │                │                   │             │
-  recepção     diagnóstico       orçamento           aprovação     execução    entrega
+  RECEIVED ──► DIAGNOSIS ──► AWAITING_APPROVAL ──► AWAITING_PAYMENT ──► EXECUTING ──► FINISHED ──► DELIVERED
+                                     └──► REJECTED
+  RECEIVED, DIAGNOSIS, AWAITING_APPROVAL, AWAITING_PAYMENT, EXECUTING ──► CANCELLED
 ```
+
+Na Fase 4 quem move a OS é a saga; só a entrega e o cancelamento são manuais.
 
 Cada transição é um método nomeado no Aggregate Root — nunca um `setStatus()` genérico:
 
 | Método | De | Para |
 |--------|----|------|
 | `changeToDiagnosis()` | RECEIVED | DIAGNOSIS |
-| `sendForApproval()` | DIAGNOSIS | AWAITING_APPROVAL |
-| `approve()` | AWAITING_APPROVAL | EXECUTING |
+| `sendForApproval(budgetId, total)` | DIAGNOSIS | AWAITING_APPROVAL |
+| `approve()` | AWAITING_APPROVAL | AWAITING_PAYMENT |
 | `reject()` | AWAITING_APPROVAL | REJECTED |
+| `startExecution()` | AWAITING_PAYMENT | EXECUTING |
 | `finish()` | EXECUTING | FINISHED |
 | `deliver()` | FINISHED | DELIVERED |
+| `cancel()` | qualquer um antes de FINISHED | CANCELLED |
 
 Transições inválidas lançam `InvalidStatusTransitionException`.
-
-> `reject()` encerra a OS quando o orçamento é recusado, exposto pelo endpoint
-> `POST /api/service-orders/{id}/approval`.
 
 Toda mudança de status emite um **evento de domínio**, consumido por três assinantes
 independentes — o que permitiu acrescentar histórico e telemetria sem tocar no domínio:
@@ -246,7 +365,7 @@ customers ──────────────── vehicles
                └── service_order_status_history
 ```
 
-O schema é versionado em `migrations/NNN_<slug>.sql` no repositório `oficina-infra-database` e
+O schema é versionado em `migrations/NNN_<slug>.sql` no repositório `oficina-infra-fundacao` e
 aplicado pelo runner `bin/migrate.php`, que controla o que já rodou na tabela `schema_migrations`.
 O modelo de dados completo — diagrama ER, dicionário de dados e a justificativa da escolha do
 MySQL — está documentado naquele repositório e na
@@ -301,7 +420,7 @@ autenticação.
 ## Estrutura de Diretórios
 
 ```
-oficina-mecanica-tech-challenge/
+oficina-api/
 ├── src/
 │   ├── Domain/                     # sem nenhuma dependência externa
 │   │   ├── Aggregate/              # ServiceOrder (Aggregate Root, máquina de estados)
@@ -366,7 +485,7 @@ oficina-mecanica-tech-challenge/
 na máquina — `scripts/php.sh` e `scripts/composer.sh` executam tudo dentro de container.
 
 **Para implantar na AWS:** `kubectl`, `awscli` v2, `terraform` 1.5+ e uma conta AWS com os três
-repositórios de infraestrutura já aplicados na ordem **database → k8s → lambda**.
+repositórios de infraestrutura já aplicados na ordem **fundação → cluster → gateway**.
 
 ---
 
@@ -374,8 +493,8 @@ repositórios de infraestrutura já aplicados na ordem **database → k8s → la
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/bregaldahq/oficina-mecanica-tech-challenge.git
-cd oficina-mecanica-tech-challenge
+git clone https://github.com/bregaldahq/oficina-api.git
+cd oficina-api
 
 # 2. Configure as variáveis de ambiente
 cp .env.example .env
@@ -472,11 +591,11 @@ Pontos de integração que valem a leitura antes do primeiro deploy:
 | Workflow | Gatilho | O que faz |
 |---|---|---|
 | [`pr.yml`](.github/workflows/pr.yml) | PR para `develop` ou `main` | PHP-CS-Fixer, PHPUnit e PHPStan nível 8 |
-| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; push em `main` → `producao` | OIDC → build → ECR → `kubectl apply -k` → Job de migration → smoke test → marca o deployment no New Relic |
+| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; `producao` só por disparo manual com a ref `main` | OIDC → `infra/` → build → ECR → configuração → Job de migration → Deployments (`kubectl apply -k`) → smoke test → marca o deployment no New Relic |
 
 Autenticação na AWS por **OIDC** (`aws-actions/configure-aws-credentials@v4` com
 `role-to-assume` e `permissions: id-token: write`). **Não existe access key estática** em nenhum
-dos quatro repositórios.
+dos seis repositórios.
 
 Secrets de repositório esperados: `AWS_ROLE_ARN`, `AWS_ACCOUNT_ID`, `NEW_RELIC_LICENSE_KEY`,
 `NEW_RELIC_ACCOUNT_ID`, `NEW_RELIC_API_KEY`, `TF_STATE_BUCKET`.
@@ -493,15 +612,16 @@ scripts/php.sh vendor/bin/php-cs-fixer fix --diff    # PSR-12
 
 Ou, com o ambiente do Compose no ar: `make test`, `make analyse`, `make lint`, `make coverage`.
 
-**Estado da suíte: 158 testes / 295 asserções verdes, PHPStan nível 8 limpo.**
+**Estado da suíte (Fase 4): 237 testes, 92,2% de cobertura das linhas de todo o `src/`, 6
+cenários de BDD, PHPStan nível 8 limpo.** `scripts/php.sh vendor/bin/behat` roda o BDD.
 
-A cobertura foca em `src/Domain` e `src/Application` — as camadas com regras de negócio. Os testes
-de integração usam SQLite in-memory via `PdoConnection::setInstance()`.
+Os testes de integração e o BDD usam os repositórios PDO de produção sobre SQLite em memória
+([`tests/Support/OsDatabase.php`](tests/Support/OsDatabase.php)).
 
 Dois testes merecem destaque:
 
 - **Teste de contrato do token** — gera um JWT com segredo e `iat` fixos e compara com um literal
-  hardcoded. O repositório `oficina-lambda-auth` tem o **mesmo** teste com o **mesmo** literal: se
+  hardcoded. O repositório `oficina-gateway-auth` tem o **mesmo** teste com o **mesmo** literal: se
   um lado mudar a montagem do token, o outro quebra no CI. É o que sustenta a duplicação
   deliberada do `JwtProvider` (ADR-002).
 - **Testes da matriz de autorização** — cobrem rota por rota e papel por papel a tabela da seção 5
@@ -527,21 +647,20 @@ Dois testes merecem destaque:
 | `POST` | `/api/auth/login` | — | Autenticação do **admin**; retorna JWT com `role=admin` |
 | `GET` | `/api/service-orders/me` | `customer` · `admin` | OS do `sub` do token |
 | `GET` | `/api/service-orders/{id}` | `customer` dono · `admin` | Buscar OS (404 se não for dono) |
-| `POST` | `/api/service-orders/{id}/approval` | `X-Webhook-Token` | Aprovar/recusar orçamento (webhook externo) |
-| `GET` | `/api/service-orders` | `admin` | Listar OS ativas (ordenadas; exclui FINISHED/DELIVERED) |
-| `POST` | `/api/service-orders` | `admin` | Criar OS (status inicial `RECEIVED`) |
-| `POST` | `/api/service-orders/{id}/items` | `admin` | Adicionar serviços e peças |
-| `PATCH` | `/api/service-orders/{id}/status` | `admin` | Avançar estado da OS |
+| `GET` | `/api/service-orders` | `admin` | Listar OS ativas (ordenadas; exclui as encerradas) |
+| `POST` | `/api/service-orders` | `admin` | Abrir OS e iniciar a saga |
+| `POST` | `/api/service-orders/{id}/delivery` | `admin` | Entregar (FINISHED → DELIVERED) |
+| `POST` | `/api/service-orders/{id}/cancellation` | `admin` | Cancelar e compensar o que a saga já fez |
+| `GET` | `/internal/customers/by-document/{cpf}` | `X-Internal-Token` | Interna, fora do API Gateway: a Lambda `auth-cpf` busca o cliente |
 | `GET` `POST` | `/api/customers` | `admin` | Listar / criar cliente (com `status`, `email`, `phone`) |
 | `GET` `PUT` `DELETE` | `/api/customers/{id}` | `admin` | Buscar / atualizar / remover cliente |
 | `GET` `POST` | `/api/vehicles` | `admin` | Listar / cadastrar veículo |
 | `GET` `PUT` `DELETE` | `/api/vehicles/{id}` | `admin` | Buscar / atualizar / remover veículo |
-| `GET` `POST` | `/api/parts` | `admin` | Listar / cadastrar peça |
-| `GET` `PUT` `DELETE` | `/api/parts/{id}` | `admin` | Buscar / atualizar / remover peça |
-| `PATCH` | `/api/parts/{id}/stock` | `admin` | Repor estoque |
-| `GET` | `/api/service-items/metrics` | `admin` | Métricas de uso por serviço |
-| `GET` `POST` | `/api/service-items` | `admin` | Listar / cadastrar serviço do catálogo |
-| `GET` `PUT` `DELETE` | `/api/service-items/{id}` | `admin` | Buscar / atualizar / remover serviço |
+
+> **Fase 4:** catálogo, peças, orçamento, aprovação e pagamento saíram para o serviço de
+> Faturamento (`/api/billing/...`); diagnóstico e reparo estão no de Execução
+> (`/api/execution/...`). Saíram daqui também a adição manual de itens e a mudança manual de
+> status: quem move a OS é a saga.
 
 > **`GET /api/service-orders/status` foi removida.** Era pública, aceitava `document` e
 > `license_plate` por query string e expunha a OS de qualquer CPF conhecido. Substituída por
@@ -553,13 +672,28 @@ também uma **coleção Postman** com ambientes prontos em
 
 ---
 
+## Entregáveis da Fase 4
+
+| Entregável | Onde |
+|---|---|
+| Três microsserviços, cada um com repositório, banco e infraestrutura | este (OS, MySQL), [`oficina-faturamento`](https://github.com/bregaldahq/oficina-faturamento) (MySQL próprio), [`oficina-execucao`](https://github.com/bregaldahq/oficina-execucao) (DynamoDB) |
+| Saga com compensação, e a justificativa da orquestração | [seção acima](#a-saga-e-por-que-ela-é-orquestrada) · [ADR-012](docs/fase-4/adr/012-saga-orquestrada-no-servico-de-os.md) · [`diagramas/saga.md`](docs/fase-4/diagramas/saga.md) |
+| Arquitetura | [`docs/fase-4/diagramas/arquitetura.md`](docs/fase-4/diagramas/arquitetura.md) · [ADRs 011 a 017](docs/fase-4/adr/README.md) · [`CONTRATOS.md`](docs/fase-4/CONTRATOS.md) |
+| Documentação da API | `swagger.yaml` de cada serviço (Swagger UI em `/docs/`, `/api/billing/docs/` e `/api/execution/docs/`) · [coleção Postman da saga](docs/fase-4/postman/) |
+| Testes, BDD e cobertura | [Qualidade](#qualidade) e [Evidências](#evidências), aqui e no README de cada serviço |
+| CI/CD por serviço, com Sonar e deploy no Kubernetes | `.github/workflows/` de cada repositório |
+| Observabilidade e rastreamento distribuído | [Observabilidade da saga](#observabilidade-da-saga) · [`docs/fase-4/newrelic/`](docs/fase-4/newrelic/README.md) |
+| Vídeo demonstrativo (≤ 15 min) | _adicionar link_ |
+
+---
+
 ## Entregáveis da Fase 3
 
 | Entregável | Onde |
 |---|---|
 | Documentação da API | Swagger UI em `/docs/` · [`swagger.yaml`](swagger.yaml) · [coleção Postman](docs/fase-3/postman/) |
 | Manifestos Kubernetes (kustomize) | [`deploy/`](deploy) |
-| Infraestrutura como Código | repositórios `oficina-infra-database`, `oficina-infra-k8s`, `oficina-lambda-auth` |
+| Infraestrutura como Código | repositórios `oficina-infra-fundacao`, `oficina-infra-cluster`, `oficina-gateway-auth` |
 | CI/CD | [`.github/workflows/pr.yml`](.github/workflows/pr.yml) · [`deploy.yml`](.github/workflows/deploy.yml) |
 | Decisões arquiteturais | [10 ADRs](docs/fase-3/adr/) · [3 RFCs](docs/fase-3/rfc/) |
 | Diagramas | [`docs/fase-3/diagramas/`](docs/fase-3/diagramas/) |

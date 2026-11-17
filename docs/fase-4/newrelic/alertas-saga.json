@@ -1,0 +1,177 @@
+{
+  "policy": {
+    "name": "Oficina Mecânica · saga · prod",
+    "incidentPreference": "PER_CONDITION_AND_TARGET",
+    "description": "Alertas da saga da Fase 4 no ambiente de produção (docs/fase-4/CONTRATOS.md §8, no oficina-api)."
+  },
+  "conditions": [
+    {
+      "name": "Saga · mensagem na DLQ",
+      "type": "NRQL_STATIC",
+      "description": "Uma mensagem esgotou as tentativas e foi para a DLQ de um serviço: a saga daquela OS não anda até alguém olhar. Runbook: ler a mensagem na DLQ (o message_id está no log message.processed com outcome=error do mesmo serviço), corrigir a causa e devolver para a fila com o redrive do SQS. Depende da integração AWS (SQS) do New Relic.",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT max(provider.approximateNumberOfMessagesVisible.Maximum) FROM QueueSample WHERE provider.queueName LIKE 'oficina-prod-%-dlq' FACET provider.queueName"
+      },
+      "signal": {
+        "aggregationWindow": 300,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "NONE"
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 0,
+          "thresholdDuration": 300,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    },
+    {
+      "name": "Saga · compensação esgotada (SagaFailed)",
+      "type": "NRQL_STATIC",
+      "description": "A saga desfez o que pôde, mas uma compensação ficou sem confirmação depois de todas as tentativas: pode haver orçamento, estoque ou pagamento preso. Runbook: GET /api/service-orders/{orderId} mostra pending_compensations; conferir no serviço dono (Faturamento ou Execução) e no log pelo correlationId. Uma confirmação atrasada fecha a saga sozinha.",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT count(*) FROM SagaFailed WHERE env = 'prod'"
+      },
+      "signal": {
+        "aggregationWindow": 60,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "STATIC",
+        "fillValue": 0
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 0,
+          "thresholdDuration": 300,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    },
+    {
+      "name": "Saga · parada além do prazo do passo",
+      "type": "NRQL_STATIC",
+      "description": "Diagnóstico ou reparo passou do prazo de alerta (SAGA_WORK_ALERT_SECONDS) sem evento da Execução. A saga não compensa sozinha nesses passos: quem decide é o admin. Runbook: ver a tarefa na fila da oficina (GET /api/execution/tasks) e, se for o caso, cancelar a OS (POST /api/service-orders/{id}/cancellation).",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT count(*) FROM Log WHERE service = 'oficina-api' AND env = 'prod' AND message = 'saga.stalled'"
+      },
+      "signal": {
+        "aggregationWindow": 60,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "STATIC",
+        "fillValue": 0
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 0,
+          "thresholdDuration": 300,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    },
+    {
+      "name": "Saga · taxa de compensação acima do normal",
+      "type": "NRQL_STATIC",
+      "description": "Mais de 50% das sagas abertas na última hora terminaram compensadas (30% é aviso). Recusa do cliente faz parte do negócio; uma alta repentina costuma ser estoque zerado, catálogo errado ou o Mercado Pago recusando. Runbook: o painel 'Compensações por passo e motivo' do dashboard Saga.",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT filter(count(*), WHERE eventType() = 'SagaCompensated') * 100 / filter(count(*), WHERE eventType() = 'SagaStarted') FROM SagaStarted, SagaCompensated WHERE env = 'prod'"
+      },
+      "signal": {
+        "aggregationWindow": 3600,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "NONE"
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 50,
+          "thresholdDuration": 3600,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        },
+        {
+          "priority": "WARNING",
+          "operator": "ABOVE",
+          "threshold": 30,
+          "thresholdDuration": 3600,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    },
+    {
+      "name": "Faturamento · erro no webhook do Mercado Pago",
+      "type": "NRQL_STATIC",
+      "description": "O webhook do Mercado Pago respondeu 5xx ou registrou erro: o Mercado Pago tenta de novo, mas um pagamento aprovado pode demorar a fazer a OS andar. Runbook: log request.failed do oficina-faturamento pelo correlation_id; conferir o MERCADOPAGO_ACCESS_TOKEN e a consulta ao pagamento.",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT count(*) FROM Log WHERE service = 'oficina-faturamento' AND env = 'prod' AND path LIKE '%/payments/webhook/mercadopago%' AND (level = 'error' OR status >= 500)"
+      },
+      "signal": {
+        "aggregationWindow": 60,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "STATIC",
+        "fillValue": 0
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 0,
+          "thresholdDuration": 300,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    },
+    {
+      "name": "Saga · worker com erro ao processar mensagens",
+      "type": "NRQL_STATIC",
+      "description": "Um worker (OS, Faturamento ou Execução) está falhando ao processar mensagens: elas voltam para a fila e, esgotadas as tentativas, vão para a DLQ. Funciona sem a integração AWS. Runbook: o painel 'Mensagens com erro por tipo' do dashboard Saga.",
+      "enabled": true,
+      "nrql": {
+        "query": "SELECT count(*) FROM Log WHERE env = 'prod' AND message = 'message.processed' AND outcome = 'error' FACET service"
+      },
+      "signal": {
+        "aggregationWindow": 300,
+        "aggregationMethod": "EVENT_FLOW",
+        "aggregationDelay": 120,
+        "fillOption": "STATIC",
+        "fillValue": 0
+      },
+      "terms": [
+        {
+          "priority": "CRITICAL",
+          "operator": "ABOVE",
+          "threshold": 5,
+          "thresholdDuration": 600,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        },
+        {
+          "priority": "WARNING",
+          "operator": "ABOVE",
+          "threshold": 0,
+          "thresholdDuration": 600,
+          "thresholdOccurrences": "AT_LEAST_ONCE"
+        }
+      ],
+      "violationTimeLimitSeconds": 86400
+    }
+  ]
+}

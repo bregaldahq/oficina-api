@@ -2,13 +2,13 @@
 
 ## Status
 
-Aceita (Fase 3).
+Aceita (Fase 3) · Substituída em parte pela [ADR-013](../../fase-4/adr/013-mensageria-com-sns-e-sqs.md) na Fase 4: a integração entre serviços passa a ser por mensageria; o tráfego do cliente continua como descrito aqui.
 
 ## Contexto
 
 A Fase 3 quebra o que era um monolito containerizado em quatro artefatos com ciclos de vida
-próprios: a rede e o banco (`oficina-infra-database`), o cluster (`oficina-infra-k8s`), a função
-de autenticação (`oficina-lambda-auth`) e a aplicação (`oficina-mecanica-tech-challenge`). Com
+próprios: a rede e o banco (`oficina-infra-fundacao`), o cluster (`oficina-infra-cluster`), a função
+de autenticação (`oficina-gateway-auth`) e a aplicação (`oficina-api`). Com
 isso surge a pergunta de estilo de integração entre eles: chamadas síncronas ou mensageria?
 
 A tentação de usar SQS/SNS/EventBridge é grande porque "microsserviços usam eventos". Mas os

@@ -33,11 +33,8 @@ interface ServiceOrderRepositoryInterface
     public function findByDocumentAndLicensePlate(string $document, string $licensePlate, ?string $status = null): array;
 
     /**
-     * Upsert: creates or updates the order.
-     * When items are present, also inserts into service_order_services/parts
-     * and decrements parts_inventory.stock_quantity (within a transaction).
+     * Upsert: cria ou atualiza a OS. Participa da transação que já estiver aberta (a do
+     * PdoSagaRepository); itens, catálogo e estoque ficam no serviço de Faturamento (Fase 4).
      */
     public function save(ServiceOrder $order): void;
-
-    public function updateStatus(ServiceOrder $order): void;
 }

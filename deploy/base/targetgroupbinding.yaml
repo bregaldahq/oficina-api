@@ -1,5 +1,5 @@
 # Adendo 1 dos Contratos: o NLB interno e o target group são criados pelo
-# Terraform do repositório `oficina-infra-k8s`. A aplicação NÃO cria um segundo
+# Terraform do repositório `oficina-infra-cluster`. A aplicação NÃO cria um segundo
 # NLB (nada de Service type=LoadBalancer nem de annotations
 # `aws-load-balancer-type: external`): o Service é um ClusterIP simples e este
 # TargetGroupBinding (CRD do AWS Load Balancer Controller) registra os Pods do

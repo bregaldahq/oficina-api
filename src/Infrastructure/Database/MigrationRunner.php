@@ -9,7 +9,7 @@ use PDO;
 /**
  * Versioned migration runner (CONTRATOS.md §6).
  *
- * The .sql files live in the oficina-infra-database repository and are mounted/copied into
+ * The .sql files live in the oficina-infra-fundacao repository and are mounted/copied into
  * MIGRATIONS_PATH; this runner only applies them, in lexicographic order, recording each
  * applied file in schema_migrations so a second run is a no-op.
  *

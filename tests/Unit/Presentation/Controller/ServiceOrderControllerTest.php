@@ -4,17 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Presentation\Controller;
 
-use App\Application\UseCase\ServiceOrder\AddItemsToServiceOrderUseCase;
-use App\Application\UseCase\ServiceOrder\ChangeServiceOrderStatusUseCase;
 use App\Application\UseCase\ServiceOrder\CreateServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\GetServiceOrderUseCase;
 use App\Application\UseCase\ServiceOrder\ListServiceOrdersByCustomerUseCase;
 use App\Application\UseCase\ServiceOrder\ListServiceOrdersUseCase;
-use App\Application\UseCase\ServiceOrder\ReviewBudgetUseCase;
 use App\Domain\Aggregate\ServiceOrder;
 use App\Domain\Entity\Customer;
 use App\Domain\Entity\Vehicle;
-use App\Domain\Event\EventDispatcherInterface;
 use App\Domain\Repository\ServiceOrderRepositoryInterface;
 use App\Domain\ValueObject\Document;
 use App\Domain\ValueObject\LicensePlate;
@@ -34,25 +30,15 @@ class ServiceOrderControllerTest extends TestCase
     protected function setUp(): void
     {
         $this->orderRepo = $this->createMock(ServiceOrderRepositoryInterface::class);
-        $dispatcher      = $this->createMock(EventDispatcherInterface::class);
 
         $this->controller = new ServiceOrderController(
             $this->createMock(CreateServiceOrderUseCase::class),
-            $this->createMock(AddItemsToServiceOrderUseCase::class),
             new GetServiceOrderUseCase($this->orderRepo),
-            $this->createMock(ChangeServiceOrderStatusUseCase::class),
             new ListServiceOrdersByCustomerUseCase($this->orderRepo),
             new ListServiceOrdersUseCase($this->orderRepo),
-            new ReviewBudgetUseCase($this->orderRepo, $dispatcher),
         );
 
         http_response_code(200);
-        unset($_ENV['WEBHOOK_TOKEN'], $_SERVER['HTTP_X_WEBHOOK_TOKEN']);
-    }
-
-    protected function tearDown(): void
-    {
-        unset($_ENV['WEBHOOK_TOKEN'], $_SERVER['HTTP_X_WEBHOOK_TOKEN']);
     }
 
     private function orderOf(string $orderId, string $customerId): ServiceOrder
@@ -139,36 +125,6 @@ class ServiceOrderControllerTest extends TestCase
         $this->orderRepo->expects($this->never())->method('findByCustomerId');
 
         $this->call('mine', [], ['role' => 'customer']);
-
-        $this->assertSame(401, http_response_code());
-    }
-
-    public function testApprovalIsClosedWhenTheWebhookTokenIsNotConfigured(): void
-    {
-        $_SERVER['HTTP_X_WEBHOOK_TOKEN'] = 'qualquer-coisa';
-
-        $body = $this->call('reviewBudget', ['id' => 'order-1']);
-
-        $this->assertSame(401, http_response_code());
-        $this->assertIsArray($body);
-        $this->assertArrayHasKey('error', $body);
-    }
-
-    public function testApprovalRejectsAWrongWebhookToken(): void
-    {
-        $_ENV['WEBHOOK_TOKEN']           = 'segredo-correto';
-        $_SERVER['HTTP_X_WEBHOOK_TOKEN'] = 'segredo-errado';
-
-        $this->call('reviewBudget', ['id' => 'order-1']);
-
-        $this->assertSame(401, http_response_code());
-    }
-
-    public function testApprovalRejectsAMissingWebhookHeader(): void
-    {
-        $_ENV['WEBHOOK_TOKEN'] = 'segredo-correto';
-
-        $this->call('reviewBudget', ['id' => 'order-1']);
 
         $this->assertSame(401, http_response_code());
     }

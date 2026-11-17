@@ -247,7 +247,7 @@
     },
     {
       "name": "Lambdas e gateway",
-      "description": "Invocações, duração, cold start e erros das Lambdas, e tráfego no API Gateway. Fonte: logs do CloudWatch entregues ao New Relic por Kinesis Firehose (oficina-lambda-auth).",
+      "description": "Invocações, duração, cold start e erros das Lambdas, e tráfego no API Gateway. Fonte: logs do CloudWatch entregues ao New Relic por Kinesis Firehose (oficina-gateway-auth).",
       "widgets": [
         {
           "title": "Invocações por função",

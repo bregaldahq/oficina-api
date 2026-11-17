@@ -15,8 +15,8 @@
   </php>
   <source>
     <include>
-      <directory suffix=".php">src/Domain</directory>
-      <directory suffix=".php">src/Application</directory>
+      <!-- Todo o src/ (docs/fase-4/CONTRATOS.md §9): é o que o pr.yml cobra. -->
+      <directory suffix=".php">src</directory>
     </include>
   </source>
 </phpunit>

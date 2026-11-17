@@ -134,7 +134,7 @@ no Brasil (LGPD com dado real).
 
 1. `us-east-1` ou `sa-east-1`? — **decidido:** `us-east-1`, por custo. Reavaliar se houver dado
    real de cliente e exigência de residência.
-2. Node group **On-Demand** ou **Spot**? — o Terraform do `oficina-infra-k8s` já suporta Spot por
+2. Node group **On-Demand** ou **Spot**? — o Terraform do `oficina-infra-cluster` já suporta Spot por
    variável (WS-B2). Recomendação: Spot em `hml`, On-Demand em `prod`. A decisão final depende de
    observar interrupções durante a fase de testes.
 3. Conta única com dois ambientes ou duas contas (`hml` e `prod`)? — **nesta fase, conta única**

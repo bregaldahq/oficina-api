@@ -165,10 +165,10 @@ aplicar regra de autorização mais fina e atual do que a borda.
 
 | Componente | Repositório | Papel |
 |---|---|---|
-| Lambda `auth-cpf` | `oficina-lambda-auth` | Valida o CPF, consulta `customers` no RDS, checa `status`, emite o JWT |
-| Lambda `jwt-authorizer` | `oficina-lambda-auth` | Valida a assinatura e o `exp`, libera `POST /api/auth/login`, devolve `isAuthorized` + contexto |
+| Lambda `auth-cpf` | `oficina-gateway-auth` | Valida o CPF, consulta `customers` no RDS, checa `status`, emite o JWT |
+| Lambda `jwt-authorizer` | `oficina-gateway-auth` | Valida a assinatura e o `exp`, libera `POST /api/auth/login`, devolve `isAuthorized` + contexto |
 | `AuthController` / `AuthMiddleware` | aplicação | Login do admin e **revalidação local** do token em toda rota protegida |
-| Segredo `oficina/<env>/auth` | `oficina-infra-database` | `JWT_SECRET` compartilhado pelos três (ADR-009) |
+| Segredo `oficina/<env>/auth` | `oficina-infra-fundacao` | `JWT_SECRET` compartilhado pelos três (ADR-009) |
 
 ### Fluxos
 
@@ -215,7 +215,7 @@ O destino desejado, e o que ele destrava:
 Passos, em ordem, cada um reversível:
 
 1. **Gerar par de chaves RSA 2048** e guardar a privada no Secrets Manager, sob a propriedade do
-   `oficina-infra-database` (mesmo racional da ADR-009: rotação acidental quebraria a emissão).
+   `oficina-infra-fundacao` (mesmo racional da ADR-009: rotação acidental quebraria a emissão).
 2. **Publicar um endpoint JWKS** em `https://<dominio>/.well-known/jwks.json` com a chave pública
    e um `kid`. Pode ser um S3 estático com CloudFront, ou uma rota da própria API — S3 é
    preferível por não depender da disponibilidade do cluster.

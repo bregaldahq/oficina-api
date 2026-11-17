@@ -79,25 +79,25 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    subgraph db["oficina-infra-database — fundação (durável)"]
+    subgraph db["oficina-infra-fundacao — fundação (durável)"]
         d1["VPC · subnets · IGW · route tables"]
         d2["SG de banco e SG cliente de banco"]
         d3["RDS MySQL 8.0"]
         d4["Secrets Manager: oficina/env/db e oficina/env/auth"]
         d5["migrations/NNN_slug.sql"]
     end
-    subgraph k8s["oficina-infra-k8s — descartável"]
+    subgraph k8s["oficina-infra-cluster — descartável"]
         k1["EKS + node group + IRSA"]
         k2["Add-ons Helm: LB Controller · metrics-server<br/>external-secrets · nri-bundle"]
         k3["ECR"]
         k4["NLB interno + target group + listener :80"]
         k5["Namespaces + ClusterSecretStore"]
     end
-    subgraph lb["oficina-lambda-auth — descartável"]
+    subgraph lb["oficina-gateway-auth — descartável"]
         l1["Lambdas auth-cpf e jwt-authorizer"]
         l2["HTTP API · rotas · VPC Link · authorizer"]
     end
-    subgraph app["oficina-mecanica-tech-challenge — descartável"]
+    subgraph app["oficina-api — descartável"]
         a1["deploy/base + overlays hml e prod"]
         a2["Deployment · Service · HPA · TargetGroupBinding"]
         a3["ExternalSecret oficina-secret"]
@@ -111,13 +111,13 @@ flowchart LR
     db -->|"SSM: db/* (Job de migration)"| app
 ```
 
-Ordem de `apply`: **database → k8s → lambda → app**. Ordem de `destroy`: inversa.
+Ordem de `apply`: **fundação → cluster → gateway → api**. Ordem de `destroy`: inversa.
 
 ## Notas de leitura
 
 - **Nenhum repositório usa `terraform_remote_state`.** Toda seta pontilhada de acoplamento acima é
   um parâmetro do SSM Parameter Store com nome fixado na seção 2 dos Contratos (ADR-008).
-- **O NLB, o target group e o listener nascem do Terraform** do `oficina-infra-k8s`, não do
+- **O NLB, o target group e o listener nascem do Terraform** do `oficina-infra-cluster`, não do
   `Service` da aplicação (Adendo 1 dos Contratos). O motivo é a ordem de apply: o repositório da
   Lambda precisa do `listener_arn` para montar a integração do gateway, e aplica **antes** do
   repositório da aplicação. Se o NLB nascesse de um `Service` do tipo `LoadBalancer`, o ARN só

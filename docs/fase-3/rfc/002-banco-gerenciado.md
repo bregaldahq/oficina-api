@@ -99,7 +99,7 @@ inverteria.
 
 ## Proposta
 
-**Amazon RDS MySQL 8.0**, propriedade do repositório `oficina-infra-database` (ADR-009):
+**Amazon RDS MySQL 8.0**, propriedade do repositório `oficina-infra-fundacao` (ADR-009):
 
 | Parâmetro | `hml` | `prod` |
 |---|---|---|
