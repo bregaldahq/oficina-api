@@ -13,7 +13,8 @@ use App\Domain\Exception\DomainException;
  * que mudou e o que publicar. Quem grava os dois juntos, com a outbox, é o repositório.
  *
  * Regras de entrega (§5.4):
- * - evento de outro passo é ignorado (`handle` devolve false);
+ * - evento de outro passo não é aplicado (`handle` devolve false). O de um passo já passado é
+ *   descartado; o de um passo posterior volta para a fila (`isAhead`, adendo F4-5);
  * - evento adiantado dentro do passo vale pelos dois (`diagnosis.completed` sem
  *   `diagnosis.started`, `payment.confirmed` sem `payment.created`);
  * - ao entrar em compensação, a OS já muda de status, na mesma transação.
@@ -26,8 +27,41 @@ final class SagaOrchestrator
     public const OUTCOME_RETRIED = 'retried';
     public const OUTCOME_FAILED  = 'failed';
 
+    /** O passo a que cada evento dos outros serviços pertence, na ordem da saga. */
+    private const EVENT_STEP = [
+        'diagnosis.started'   => Saga::STEP_DIAGNOSIS,
+        'diagnosis.completed' => Saga::STEP_DIAGNOSIS,
+        'diagnosis.failed'    => Saga::STEP_DIAGNOSIS,
+        'budget.generated'    => Saga::STEP_BUDGET,
+        'budget.failed'       => Saga::STEP_BUDGET,
+        'budget.approved'     => Saga::STEP_APPROVAL,
+        'budget.rejected'     => Saga::STEP_APPROVAL,
+        'payment.created'     => Saga::STEP_PAYMENT,
+        'payment.confirmed'   => Saga::STEP_PAYMENT,
+        'payment.failed'      => Saga::STEP_PAYMENT,
+        'repair.started'      => Saga::STEP_REPAIR,
+        'repair.completed'    => Saga::STEP_REPAIR,
+        'repair.failed'       => Saga::STEP_REPAIR,
+    ];
+
+    private const STEP_ORDER = [Saga::STEP_DIAGNOSIS, Saga::STEP_BUDGET, Saga::STEP_APPROVAL, Saga::STEP_PAYMENT, Saga::STEP_REPAIR];
+
     public function __construct(private readonly SagaTimeouts $timeouts)
     {
+    }
+
+    /**
+     * O evento é de um passo posterior ao atual: chegou antes do evento que leva a saga até lá
+     * (o SQS standard não garante ordem; o anterior pode estar sendo reentregue). Não se descarta:
+     * vale de novo quando a saga alcançar o passo.
+     */
+    public function isAhead(Saga $saga, string $event): bool
+    {
+        $step = self::EVENT_STEP[$event] ?? null;
+        $now  = array_search($saga->getStep(), self::STEP_ORDER, true);
+
+        return $saga->isRunning() && $step !== null && $now !== false
+                                  && array_search($step, self::STEP_ORDER, true) > $now;
     }
 
     public function start(string $sagaId, ServiceOrder $order, string $correlationId, string $description, \DateTimeImmutable $now): Saga

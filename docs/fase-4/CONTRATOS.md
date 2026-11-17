@@ -295,8 +295,16 @@ Todo tipo publicado tem pelo menos um consumidor, e todo tipo consumido tem prod
   transação do efeito. Mensagem com `id` já registrado é confirmada sem efeito.
 - **Comando repetido devolve o mesmo resultado.** Receber `billing.generate-budget` duas vezes
   para a mesma `saga_id` não cria dois orçamentos.
-- **Evento fora de hora é ignorado.** O orquestrador só aceita os eventos do passo atual da
-  saga; os demais são registrados em log e confirmados.
+- **Evento de passo já passado é ignorado; evento de passo posterior volta para a fila.** O
+  orquestrador só aceita os eventos do passo atual da saga. O de um passo que a saga já deixou
+  (ou de uma saga encerrada) é registrado em log e confirmado. O de um passo **posterior** ao
+  atual (`budget.approved` com a saga ainda em `BUDGET`, porque o `budget.generated` está sendo
+  reentregue) não é descartado: o worker o deixa na fila (`outcome` `retry`) e ele vale quando a
+  saga chegar ao passo. Se nunca chegar, as entregas se esgotam e a mensagem vai para a DLQ.
+  *(Adendo F4-5; antes, o adiantado era descartado e o aceite do cliente podia se perder.)*
+- **Colisão de versão não é erro.** Quando outra gravação (a API, a varredura de prazos, outra
+  mensagem) muda a mesma saga primeiro, o consumidor recarrega e tenta de novo na hora, até 3
+  vezes; se persistir, a mensagem volta para a fila (`retry`), sem log de erro. *(Adendo F4-5.)*
 - **Evento adiantado dentro do passo vale pelos dois.** A entrega não tem ordem: se
   `diagnosis.completed` chegar antes de `diagnosis.started`, ou `payment.confirmed` antes de
   `payment.created`, o orquestrador aplica as duas transições em sequência. O evento
@@ -482,7 +490,7 @@ Mantém o New Relic da Fase 3.
   extensão, é no-op.
 - **Log.** As linhas da Fase 3, mais `saga_id` e `os_id` quando existirem. O worker escreve uma
   linha `message.processed` por mensagem, com `message_id`, `message_type`, `duration_ms` e
-  `outcome` (`ok`, `duplicate`, `ignored`, `error`).
+  `outcome` (`ok`, `duplicate`, `ignored`, `error`, e no OS também `retry`, §5.4).
 
 ### Custom events novos
 

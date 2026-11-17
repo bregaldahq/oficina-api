@@ -109,13 +109,16 @@ class SagaFlowTest extends TestCase
 
     public function testEventoForaDeHoraEIgnoradoEMensagemRepetidaEDuplicata(): void
     {
-        $osId = $this->h->create()->getId();
+        // Evento de um passo que a saga já passou: descartado (o adiantado volta para a fila,
+        // testEventoAdiantadoVoltaParaAFilaEValeQuandoASagaChegaNoPasso).
+        $past = $this->h->until(Saga::STEP_BUDGET);
+        $this->h->reply($past, 'diagnosis.started');
+        $this->assertSame([Saga::RUNNING, Saga::STEP_BUDGET, 0], [$this->h->saga($past)->getState(), $this->h->saga($past)->getStep(), $this->h->bus->queued()]);
+        $this->assertSame('ignored', end($this->h->observers->logs)['context']['outcome'] ?? null);
 
-        $this->h->reply($osId, 'repair.completed');
-        $this->assertSame([Saga::RUNNING, Saga::STEP_DIAGNOSIS], [$this->h->saga($osId)->getState(), $this->h->saga($osId)->getStep()]);
-        $this->assertSame('ignored', $this->h->observers->logs[0]['context']['outcome']);
-
-        $message = $this->h->reply($osId, 'diagnosis.started', [], 'mesma');
+        $osId                 = $this->h->create()->getId();
+        $this->h->transitions = [];
+        $message              = $this->h->reply($osId, 'diagnosis.started', [], 'mesma');
         $this->h->bus->deliver($message);
         $this->h->tick();
         $this->assertSame('duplicate', end($this->h->observers->logs)['context']['outcome'] ?? null);
@@ -419,5 +422,31 @@ class SagaFlowTest extends TestCase
         $this->assertNotSame([], $mine);
 
         return $mine[count($mine) - 1];
+    }
+
+    public function testEventoAdiantadoVoltaParaAFilaEValeQuandoASagaChegaNoPasso(): void
+    {
+        $osId = $this->h->until(Saga::STEP_BUDGET);
+
+        // O SQS standard não garante ordem: a aprovação chega antes do orçamento gerado.
+        $this->h->reply($osId, 'budget.approved', ['budget_id' => 'bud-1']);
+
+        $this->assertSame([Saga::STEP_BUDGET, 1], [$this->h->saga($osId)->getStep(), $this->h->bus->queued()], 'não foi descartada');
+        $retry = array_values(array_filter($this->h->observers->logs, static fn (array $l) => ($l['context']['outcome'] ?? null) === 'retry'));
+        $this->assertSame(['info', 'budget.approved'], [$retry[0]['level'], $retry[0]['context']['message_type']], 'reentrega não é erro');
+
+        $this->h->reply($osId, 'budget.generated', ['budget_id' => 'bud-1', 'total_amount' => 558]);
+        $this->h->worker->tick(0);
+
+        $this->assertSame([Saga::STEP_PAYMENT, 'AWAITING_PAYMENT', 0], [$this->h->saga($osId)->getStep(), $this->h->order($osId)->getStatus(), $this->h->bus->queued()]);
+    }
+
+    public function testEventoDePassoJaPassadoContinuaIgnorado(): void
+    {
+        $osId = $this->h->until(Saga::STEP_PAYMENT);
+
+        $this->h->reply($osId, 'diagnosis.completed', ['items' => []]);
+
+        $this->assertSame([Saga::STEP_PAYMENT, 0], [$this->h->saga($osId)->getStep(), $this->h->bus->queued()]);
     }
 }

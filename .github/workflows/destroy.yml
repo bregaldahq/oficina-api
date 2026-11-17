@@ -1,0 +1,99 @@
+# Desprovisiona a infraestrutura própria deste serviço (`infra/`): fila e DLQ, assinatura do tópico e role IRSA do serviço de OS.
+# O banco do OS é da fundação e o ECR, do cluster: nenhum dos dois sai daqui. A chave do state usa
+# o nome antigo do repositório, como o deploy.yml.
+# Só roda quando disparado à mão, depois que o nome do ambiente for digitado por extenso.
+# Agente nunca dispara este workflow.
+#
+# Ordem de destroy do sistema (inversa à de apply): os três serviços primeiro, depois gateway,
+# cluster e fundação. O `infra/` lê parâmetros SSM do cluster e da fundação, então precisa rodar
+# enquanto eles ainda existem. Os pods deste serviço saem junto com o cluster.
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: "Ambiente a destruir"
+        required: true
+        type: choice
+        options: [hml, prod]
+      confirmacao:
+        description: "Digite o nome do ambiente para confirmar (hml ou prod)"
+        required: true
+        type: string
+
+concurrency:
+  group: destroy-${{ inputs.ambiente }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.9.8
+
+jobs:
+  destroy:
+    name: "terraform destroy (infra/): ${{ inputs.ambiente }}"
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.ambiente == 'prod' && 'producao' || 'homologacao' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra
+    steps:
+      # A confirmação entra por variável de ambiente, não interpolada no script.
+      - name: Conferir a confirmação
+        working-directory: .
+        env:
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+          AMBIENTE: ${{ inputs.ambiente }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMACAO" != "$AMBIENTE" ]; then
+            echo "::error::A confirmação não bate com o ambiente escolhido. Nada foi feito."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=oficina/oficina-mecanica-tech-challenge/${{ inputs.ambiente }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=oficina-tflock" \
+            -backend-config="encrypt=true"
+
+      - name: O que será destruído
+        run: |
+          set -euo pipefail
+          terraform plan -destroy -input=false -no-color -var-file="envs/${{ inputs.ambiente }}.tfvars" | tail -n 120
+
+      - name: terraform destroy
+        run: terraform destroy -input=false -auto-approve -var-file="envs/${{ inputs.ambiente }}.tfvars"
+
+      # Um destroy que deixa recursos para trás é pior que um que falha alto: o custo continua
+      # e ninguém fica sabendo.
+      - name: Conferir que o state ficou vazio
+        run: |
+          set -euo pipefail
+          restante=$(terraform state list | wc -l)
+          echo "recursos restantes no state: $restante"
+          terraform state list || true
+          test "$restante" -eq 0
