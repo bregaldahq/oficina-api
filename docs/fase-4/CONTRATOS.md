@@ -51,8 +51,8 @@ O ECR do OS continua no `oficina-infra-cluster`, como na Fase 3.
 
 > **Adendo F4-2 (`infra/` nos repos de serviço).** A seção 8 da Fase 3 removeu `infra/` do
 > `oficina-api`. Ele volta, com outro conteúdo: só os recursos do próprio serviço (fila, DLQ,
-> assinatura, role IRSA). State em `oficina/oficina-api/<env>/terraform.tfstate`, no mesmo
-> bucket. O role de CI do repo ganha as permissões desse Terraform no `bootstrap/aws/`.
+> assinatura, role IRSA). State em `oficina/oficina-mecanica-tech-challenge/<env>/terraform.tfstate`
+> (o nome antigo do repo, como a tag `Repo` e o role de CI), no mesmo bucket. O role de CI do repo ganha as permissões desse Terraform no `bootstrap/aws/`.
 
 Ordem de `apply`: **fundação → cluster → gateway → `infra/` de cada serviço → deploy de cada
 serviço**. Os três serviços não dependem uns dos outros para subir. `destroy`: inversa.
@@ -295,8 +295,16 @@ Todo tipo publicado tem pelo menos um consumidor, e todo tipo consumido tem prod
   transação do efeito. Mensagem com `id` já registrado é confirmada sem efeito.
 - **Comando repetido devolve o mesmo resultado.** Receber `billing.generate-budget` duas vezes
   para a mesma `saga_id` não cria dois orçamentos.
-- **Evento fora de hora é ignorado.** O orquestrador só aceita os eventos do passo atual da
-  saga; os demais são registrados em log e confirmados.
+- **Evento de passo já passado é ignorado; evento de passo posterior volta para a fila.** O
+  orquestrador só aceita os eventos do passo atual da saga. O de um passo que a saga já deixou
+  (ou de uma saga encerrada) é registrado em log e confirmado. O de um passo **posterior** ao
+  atual (`budget.approved` com a saga ainda em `BUDGET`, porque o `budget.generated` está sendo
+  reentregue) não é descartado: o worker o deixa na fila (`outcome` `retry`) e ele vale quando a
+  saga chegar ao passo. Se nunca chegar, as entregas se esgotam e a mensagem vai para a DLQ.
+  *(Adendo F4-5; antes, o adiantado era descartado e o aceite do cliente podia se perder.)*
+- **Colisão de versão não é erro.** Quando outra gravação (a API, a varredura de prazos, outra
+  mensagem) muda a mesma saga primeiro, o consumidor recarrega e tenta de novo na hora, até 3
+  vezes; se persistir, a mensagem volta para a fila (`retry`), sem log de erro. *(Adendo F4-5.)*
 - **Evento adiantado dentro do passo vale pelos dois.** A entrega não tem ordem: se
   `diagnosis.completed` chegar antes de `diagnosis.started`, ou `payment.confirmed` antes de
   `payment.created`, o orquestrador aplica as duas transições em sequência. O evento
@@ -434,6 +442,20 @@ isso a Lambda deixa de usar o segredo `oficina/<env>/db`, os parâmetros `/ofici
 e o SG `db-client`. Os códigos de erro do `POST /auth/cpf` não mudam; OS indisponível responde
 `503`.
 
+> **Adendo F4-3 (`auth-cpf` pela rota interna).** A tabela de códigos do `POST /auth/cpf` (Fase 3)
+> ganha uma linha:
+>
+> | Situação | Status | Corpo |
+> |---|---|---|
+> | Serviço de OS sem resposta ou com `5xx` | 503 | `{"error":"Serviço temporariamente indisponível. Tente novamente."}` |
+>
+> Na rota interna, só o `404` com corpo `{"error":"Cliente não encontrado."}` quer dizer CPF não
+> cadastrado. Outro `404` (o `{"error":"Rota não encontrada."}` de um OS sem a rota) e o `401` de
+> `X-Internal-Token` recusado são defeito de implantação: a Lambda responde `500`, para que o
+> smoke do deploy (que aceita `404`) não passe verde com a Lambda chamando um OS antigo. O corpo
+> do `404` de cliente é contrato entre o `InternalCustomerController` do OS e o
+> `HttpCustomerRepository` do `oficina-gateway-auth`.
+
 Rede: hoje é o SG `db-client` que dá à Lambda acesso ao endpoint do Secrets Manager, e ele não
 tem saída para a porta 80. Por isso a Lambda ganha um SG próprio e o SG do endpoint passa a
 aceitar o CIDR da VPC (§1). O acesso ao segredo continua restrito pelo IAM.
@@ -468,7 +490,7 @@ Mantém o New Relic da Fase 3.
   extensão, é no-op.
 - **Log.** As linhas da Fase 3, mais `saga_id` e `os_id` quando existirem. O worker escreve uma
   linha `message.processed` por mensagem, com `message_id`, `message_type`, `duration_ms` e
-  `outcome` (`ok`, `duplicate`, `ignored`, `error`).
+  `outcome` (`ok`, `duplicate`, `ignored`, `error`, e no OS também `retry`, §5.4).
 
 ### Custom events novos
 
@@ -481,6 +503,13 @@ Mantém o New Relic da Fase 3.
 | `PaymentConfirmed` | Faturamento | `paymentId`, `orderId`, `amount`, `env` |
 
 `ServiceOrderCreated` e `ServiceOrderStatusChanged` continuam.
+
+> **Adendo F4-4 (atributos dos eventos da saga).** Os quatro eventos da saga levam também
+> `correlationId`, para cruzar com o log. `SagaFailed` leva `pending` (as compensações sem
+> confirmação, separadas por vírgula). `SagaCompensated` leva `afterFailure`: `true` quando uma
+> confirmação atrasada fecha uma saga que já tinha emitido `SagaFailed`, para o dashboard não
+> contar a mesma saga como falha e como compensada. `SagaStepCompleted` é emitido também para o
+> passo `REPAIR`, quando a saga termina.
 
 ### Alertas novos
 

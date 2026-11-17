@@ -17,6 +17,8 @@ class AuthController
 {
     public function __construct(
         private readonly AuthenticateUseCase $authenticateUseCase,
+        /** Quem lê o corpo; os testes passam um, em produção é php://input. */
+        private readonly ?\Closure $bodyReader = null,
     ) {
     }
 
@@ -47,7 +49,9 @@ class AuthController
     /** @return array<string, mixed> */
     private function parseBody(): array
     {
-        $raw = file_get_contents('php://input');
-        return json_decode($raw ?: '{}', true) ?? [];
+        $raw  = $this->bodyReader !== null ? ($this->bodyReader)() : file_get_contents('php://input');
+        $data = json_decode(is_string($raw) && $raw !== '' ? $raw : '{}', true);
+
+        return is_array($data) ? $data : [];
     }
 }

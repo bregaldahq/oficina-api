@@ -16,6 +16,13 @@ data:
   NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
   # Sobrescrito por overlay: oficina-api-hml / oficina-api-prod.
   NEW_RELIC_APP_NAME: "oficina-api"
+  # Fase 4: a saga (docs/fase-4/CONTRATOS.md §6.3). MESSAGING_TOPIC_ARN e MESSAGING_QUEUE_URL
+  # entram pelo deploy.yml, lidos do SSM.
+  AWS_REGION: "us-east-1"
+  SAGA_BUDGET_TIMEOUT_SECONDS: "300"
+  SAGA_APPROVAL_TIMEOUT_SECONDS: "259200"
+  SAGA_PAYMENT_TIMEOUT_SECONDS: "86400"
+  SAGA_WORK_ALERT_SECONDS: "172800"
   # Notificações por e-mail (SMTP). Vazio desabilita.
   SMTP_HOST: ""
   SMTP_PORT: "587"

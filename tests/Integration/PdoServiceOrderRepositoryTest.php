@@ -6,18 +6,16 @@ namespace Tests\Integration;
 
 use App\Domain\Aggregate\ServiceOrder;
 use App\Domain\Entity\Customer;
-use App\Domain\Entity\Part;
 use App\Domain\Entity\Vehicle;
 use App\Domain\ValueObject\Document;
 use App\Domain\ValueObject\LicensePlate;
 use App\Infrastructure\Database\PdoConnection;
 use App\Infrastructure\Repository\PdoCustomerRepository;
-use App\Infrastructure\Repository\PdoPartRepository;
 use App\Infrastructure\Repository\PdoServiceOrderRepository;
 use App\Infrastructure\Repository\PdoVehicleRepository;
-use App\Infrastructure\UuidGenerator;
 use PDO;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\OsDatabase;
 
 class PdoServiceOrderRepositoryTest extends TestCase
 {
@@ -25,103 +23,18 @@ class PdoServiceOrderRepositoryTest extends TestCase
     private PdoServiceOrderRepository $repo;
     private PdoCustomerRepository $customerRepo;
     private PdoVehicleRepository $vehicleRepo;
-    private PdoPartRepository $partRepo;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-
-        PdoConnection::setInstance($this->pdo);
-        $this->createSchema();
-
-        $uuid               = new UuidGenerator();
-        $this->repo         = new PdoServiceOrderRepository($uuid);
+        $this->pdo          = OsDatabase::create();
+        $this->repo         = new PdoServiceOrderRepository();
         $this->customerRepo = new PdoCustomerRepository();
         $this->vehicleRepo  = new PdoVehicleRepository();
-        $this->partRepo     = new PdoPartRepository();
     }
 
     protected function tearDown(): void
     {
         PdoConnection::reset();
-    }
-
-    private function createSchema(): void
-    {
-        $this->pdo->exec('
-            CREATE TABLE customers (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                document TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL DEFAULT \'ACTIVE\',
-                email TEXT NULL,
-                phone TEXT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE vehicles (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT NOT NULL,
-                license_plate TEXT NOT NULL UNIQUE,
-                brand TEXT NOT NULL,
-                model TEXT NOT NULL,
-                year INTEGER NOT NULL,
-                FOREIGN KEY (customer_id) REFERENCES customers(id)
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE service_catalog (
-                id TEXT PRIMARY KEY,
-                description TEXT NOT NULL,
-                base_price REAL NOT NULL,
-                estimated_time_minutes INTEGER NOT NULL
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE parts_inventory (
-                id TEXT PRIMARY KEY,
-                description TEXT NOT NULL,
-                price REAL NOT NULL,
-                stock_quantity INTEGER NOT NULL DEFAULT 0
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE service_orders (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT NOT NULL,
-                vehicle_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT \'RECEIVED\',
-                total_amount REAL NOT NULL DEFAULT 0.00,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES customers(id),
-                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE service_order_services (
-                id TEXT PRIMARY KEY,
-                service_order_id TEXT NOT NULL,
-                service_catalog_id TEXT NOT NULL,
-                price_charged REAL NOT NULL,
-                FOREIGN KEY (service_order_id) REFERENCES service_orders(id),
-                FOREIGN KEY (service_catalog_id) REFERENCES service_catalog(id)
-            )
-        ');
-        $this->pdo->exec('
-            CREATE TABLE service_order_parts (
-                id TEXT PRIMARY KEY,
-                service_order_id TEXT NOT NULL,
-                parts_inventory_id TEXT NOT NULL,
-                quantity_used INTEGER NOT NULL,
-                unit_price_charged REAL NOT NULL,
-                FOREIGN KEY (service_order_id) REFERENCES service_orders(id),
-                FOREIGN KEY (parts_inventory_id) REFERENCES parts_inventory(id)
-            )
-        ');
     }
 
     private function makeCustomer(string $id = 'cust-1'): Customer
@@ -177,26 +90,45 @@ class PdoServiceOrderRepositoryTest extends TestCase
         $this->assertSame('RECEIVED', $found->getStatus());
     }
 
-    public function testStockIsDecrementedOnSaveWithParts(): void
+    public function testGravaOrcamentoLinkEStatusNovosDaFase4(): void
     {
         $customer = $this->makeCustomer();
         $vehicle  = $this->makeVehicle();
         $this->customerRepo->save($customer);
         $this->vehicleRepo->save($vehicle);
-
-        $part = Part::create('p-1', 'Filtro de óleo', 45.00, 10);
-        $this->partRepo->save($part);
-
         $order = ServiceOrder::create('order-1', $customer, $vehicle);
-        $order->addPart(Part::create('p-1', 'Filtro de óleo', 45.00, 10), 3);
         $this->repo->save($order);
 
-        $updated = $this->partRepo->findById('p-1');
-        $this->assertNotNull($updated);
-        $this->assertSame(7, $updated->getStockQuantity());
+        $loaded = $this->repo->findById('order-1');
+        $this->assertNotNull($loaded);
+        $loaded->changeToDiagnosis();
+        $loaded->sendForApproval('budget-9', 558.0);
+        $loaded->approve();
+        $loaded->recordPaymentLink('https://pagar');
+        $this->repo->save($loaded);
+
+        $found = $this->repo->findById('order-1');
+        $this->assertNotNull($found);
+        $this->assertSame('AWAITING_PAYMENT', $found->getStatus());
+        $this->assertSame('budget-9', $found->getBudgetId());
+        $this->assertSame('https://pagar', $found->getPaymentUrl());
+        $this->assertSame(558.0, $found->getTotalAmount());
     }
 
-    public function testUpdateStatusPersists(): void
+    public function testParticipaDaTransacaoAbertaPorOutroRepositorio(): void
+    {
+        $this->customerRepo->save($this->makeCustomer());
+        $this->vehicleRepo->save($this->makeVehicle());
+
+        $this->pdo->beginTransaction();
+        $this->repo->save(ServiceOrder::create('order-1', $this->makeCustomer(), $this->makeVehicle()));
+        $this->assertTrue($this->pdo->inTransaction(), 'não fecha a transação de quem abriu');
+        $this->pdo->rollBack();
+
+        $this->assertNull($this->repo->findById('order-1'), 'o rollback de quem abriu desfaz a OS');
+    }
+
+    public function testSaveOfExistingOrderPersistsStatus(): void
     {
         $customer = $this->makeCustomer();
         $vehicle  = $this->makeVehicle();
@@ -206,8 +138,10 @@ class PdoServiceOrderRepositoryTest extends TestCase
         $order = ServiceOrder::create('order-1', $customer, $vehicle);
         $this->repo->save($order);
 
-        $order->changeToDiagnosis();
-        $this->repo->updateStatus($order);
+        $loaded = $this->repo->findById('order-1');
+        $this->assertNotNull($loaded);
+        $loaded->changeToDiagnosis();
+        $this->repo->save($loaded);
 
         $found = $this->repo->findById('order-1');
         $this->assertNotNull($found);
@@ -272,6 +206,9 @@ class PdoServiceOrderRepositoryTest extends TestCase
         $insert('diagnosis', 'DIAGNOSIS', '2026-01-02 10:00:00');
         $insert('awaiting', 'AWAITING_APPROVAL', '2026-01-03 10:00:00');
         $insert('executing', 'EXECUTING', '2026-01-04 10:00:00');
+        $insert('payment', 'AWAITING_PAYMENT', '2026-01-04 11:00:00');
+        $insert('cancelled', 'CANCELLED', '2026-01-01 07:00:00');
+        $insert('rejected', 'REJECTED', '2026-01-01 06:00:00');
         $insert('finished', 'FINISHED', '2026-01-01 09:00:00');
         $insert('delivered', 'DELIVERED', '2026-01-01 08:00:00');
 
@@ -279,6 +216,7 @@ class PdoServiceOrderRepositoryTest extends TestCase
 
         $this->assertSame([
             'executing',
+            'payment',
             'awaiting',
             'diagnosis',
             'received-old',

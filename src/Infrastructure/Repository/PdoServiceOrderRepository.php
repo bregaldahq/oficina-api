@@ -6,11 +6,8 @@ namespace App\Infrastructure\Repository;
 
 use App\Domain\Aggregate\ServiceOrder;
 use App\Domain\Entity\Customer;
-use App\Domain\Entity\Part;
-use App\Domain\Entity\ServiceItem;
 use App\Domain\Entity\Vehicle;
 use App\Domain\Repository\ServiceOrderRepositoryInterface;
-use App\Domain\UuidGeneratorInterface;
 use App\Domain\ValueObject\CustomerStatus;
 use App\Domain\ValueObject\Document;
 use App\Domain\ValueObject\LicensePlate;
@@ -21,7 +18,7 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
 {
     private PDO $pdo;
 
-    public function __construct(private readonly UuidGeneratorInterface $uuidGenerator)
+    public function __construct()
     {
         $this->pdo = PdoConnection::getInstance();
     }
@@ -46,7 +43,7 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
             return null;
         }
 
-        return $this->hydrateWithItems($row);
+        return $this->hydrate($row);
     }
 
     public function findAll(): array
@@ -63,7 +60,7 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
              ORDER BY so.created_at DESC'
         );
         assert($stmt !== false);
-        return array_map(fn (array $row) => $this->hydrateWithItems($row), $stmt->fetchAll());
+        return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
     }
 
     public function findActiveOrdered(): array
@@ -77,18 +74,19 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
              FROM service_orders so
              JOIN customers c ON c.id = so.customer_id
              JOIN vehicles  v ON v.id = so.vehicle_id
-             WHERE so.status NOT IN ('FINISHED', 'DELIVERED')
+             WHERE so.status NOT IN ('FINISHED', 'DELIVERED', 'REJECTED', 'CANCELLED')
              ORDER BY CASE so.status
                           WHEN 'EXECUTING'         THEN 1
-                          WHEN 'AWAITING_APPROVAL' THEN 2
-                          WHEN 'DIAGNOSIS'         THEN 3
-                          WHEN 'RECEIVED'          THEN 4
-                          ELSE 5
+                          WHEN 'AWAITING_PAYMENT'  THEN 2
+                          WHEN 'AWAITING_APPROVAL' THEN 3
+                          WHEN 'DIAGNOSIS'         THEN 4
+                          WHEN 'RECEIVED'          THEN 5
+                          ELSE 6
                       END ASC,
                       so.created_at ASC"
         );
         assert($stmt !== false);
-        return array_map(fn (array $row) => $this->hydrateWithItems($row), $stmt->fetchAll());
+        return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
     }
 
     public function findByCustomerId(string $customerId): array
@@ -107,7 +105,7 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
         );
         $stmt->execute([':customer_id' => $customerId]);
 
-        return array_map(fn (array $row) => $this->hydrateWithItems($row), $stmt->fetchAll());
+        return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
     }
 
     public function findByDocumentAndLicensePlate(string $document, string $licensePlate, ?string $status = null): array
@@ -134,110 +132,69 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
 
-        return array_map(fn (array $row) => $this->hydrateWithItems($row), $stmt->fetchAll());
+        return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
     }
 
+    /**
+     * Grava a OS. Se já houver uma transação aberta na conexão (a do repositório da saga, que
+     * grava saga, OS, outbox e inbox juntas: ADR-012 e ADR-017), participa dela; senão abre a
+     * própria (ADR-004).
+     */
     public function save(ServiceOrder $order): void
     {
-        $this->pdo->beginTransaction();
+        $own = !$this->pdo->inTransaction();
+        if ($own) {
+            $this->pdo->beginTransaction();
+        }
 
         try {
-            if ($order->isNew()) {
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO service_orders (id, customer_id, vehicle_id, status, total_amount)
-                     VALUES (:id, :customer_id, :vehicle_id, :status, :total_amount)'
-                );
-                $stmt->execute([
-                    ':id'           => $order->getId(),
-                    ':customer_id'  => $order->getCustomer()->getId(),
-                    ':vehicle_id'   => $order->getVehicle()->getId(),
-                    ':status'       => $order->getStatus(),
-                    ':total_amount' => $order->getTotalAmount(),
-                ]);
-            } else {
-                $exists = $this->pdo->prepare('SELECT id FROM service_orders WHERE id = :id');
-                $exists->execute([':id' => $order->getId()]);
+            $params = [
+                ':id'           => $order->getId(),
+                ':status'       => $order->getStatus(),
+                ':total_amount' => $order->getTotalAmount(),
+                ':budget_id'    => $order->getBudgetId(),
+                ':payment_url'  => $order->getPaymentUrl(),
+            ];
 
-                if ($exists->fetch()) {
-                    $stmt = $this->pdo->prepare(
-                        'UPDATE service_orders
-                         SET status = :status, total_amount = :total_amount
-                         WHERE id = :id'
-                    );
-                    $stmt->execute([
-                        ':status'       => $order->getStatus(),
-                        ':total_amount' => $order->getTotalAmount(),
-                        ':id'           => $order->getId(),
-                    ]);
-                } else {
-                    $stmt = $this->pdo->prepare(
-                        'INSERT INTO service_orders (id, customer_id, vehicle_id, status, total_amount)
-                         VALUES (:id, :customer_id, :vehicle_id, :status, :total_amount)'
-                    );
-                    $stmt->execute([
-                        ':id'           => $order->getId(),
-                        ':customer_id'  => $order->getCustomer()->getId(),
-                        ':vehicle_id'   => $order->getVehicle()->getId(),
-                        ':status'       => $order->getStatus(),
-                        ':total_amount' => $order->getTotalAmount(),
-                    ]);
+            $insert = fn () => $this->pdo->prepare(
+                'INSERT INTO service_orders (id, customer_id, vehicle_id, status, total_amount, budget_id, payment_url)
+                 VALUES (:id, :customer_id, :vehicle_id, :status, :total_amount, :budget_id, :payment_url)'
+            )->execute($params + [
+                ':customer_id' => $order->getCustomer()->getId(),
+                ':vehicle_id'  => $order->getVehicle()->getId(),
+            ]);
+
+            if ($order->isNew()) {
+                // OS nova: INSERT puro, para um id repetido falhar em vez de sobrescrever outra OS.
+                $insert();
+            } else {
+                $update = $this->pdo->prepare(
+                    'UPDATE service_orders
+                     SET status = :status, total_amount = :total_amount, budget_id = :budget_id, payment_url = :payment_url
+                     WHERE id = :id'
+                );
+                $update->execute($params);
+
+                $exists = $this->pdo->prepare('SELECT 1 FROM service_orders WHERE id = :id');
+                $exists->execute([':id' => $order->getId()]);
+                if ($exists->fetchColumn() === false) {
+                    $insert();
                 }
             }
 
-            foreach ($order->getServices() as $service) {
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO service_order_services (id, service_order_id, service_catalog_id, price_charged)
-                     VALUES (:id, :order_id, :service_id, :price)'
-                );
-                $stmt->execute([
-                    ':id'         => $this->uuidGenerator->generate(),
-                    ':order_id'   => $order->getId(),
-                    ':service_id' => $service->getId(),
-                    ':price'      => $service->getBasePrice(),
-                ]);
+            if ($own) {
+                $this->pdo->commit();
             }
-
-            foreach ($order->getPartsWithQuantity() as $item) {
-                /** @var Part $part */
-                $part     = $item['part'];
-                $quantity = $item['quantity'];
-
-                $stmt = $this->pdo->prepare(
-                    'INSERT INTO service_order_parts (id, service_order_id, parts_inventory_id, quantity_used, unit_price_charged)
-                     VALUES (:id, :order_id, :part_id, :qty, :price)'
-                );
-                $stmt->execute([
-                    ':id'       => $this->uuidGenerator->generate(),
-                    ':order_id' => $order->getId(),
-                    ':part_id'  => $part->getId(),
-                    ':qty'      => $quantity,
-                    ':price'    => $part->getPrice(),
-                ]);
-
-                // decrementa estoque atomicamente na mesma transação
-                $update = $this->pdo->prepare(
-                    'UPDATE parts_inventory SET stock_quantity = stock_quantity - :qty WHERE id = :id'
-                );
-                $update->execute([':qty' => $quantity, ':id' => $part->getId()]);
+        } catch (\Throwable $e) {
+            if ($own) {
+                $this->pdo->rollBack();
             }
-
-            $this->pdo->commit();
-        } catch (\Exception $e) {
-            $this->pdo->rollBack();
             throw $e;
         }
     }
 
-    public function updateStatus(ServiceOrder $order): void
-    {
-        $stmt = $this->pdo->prepare(
-            'UPDATE service_orders SET status = :status WHERE id = :id'
-        );
-        $stmt->execute([':status' => $order->getStatus(), ':id' => $order->getId()]);
-    }
-
     /** @param array<string, mixed> $row */
-    private function hydrateWithItems(array $row): ServiceOrder
+    private function hydrate(array $row): ServiceOrder
     {
         $customer = Customer::create(
             id: $row['customer_id'],
@@ -257,62 +214,15 @@ class PdoServiceOrderRepository implements ServiceOrderRepositoryInterface
             year: (int)$row['v_year'],
         );
 
-        $services          = $this->loadServices($row['id']);
-        $partsWithQuantity = $this->loadParts($row['id']);
-        $totalAmount       = array_sum(array_map(fn (ServiceItem $s) => $s->getBasePrice(), $services))
-            + array_sum(array_map(fn (array $p) => $p['part']->getPrice() * $p['quantity'], $partsWithQuantity));
-
         return ServiceOrder::reconstitute(
             id: $row['id'],
             customer: $customer,
             vehicle: $vehicle,
             status: $row['status'],
-            totalAmount: round((float)$row['total_amount'] ?: $totalAmount, 2),
+            totalAmount: round((float)$row['total_amount'], 2),
             createdAt: new \DateTimeImmutable($row['created_at']),
-            services: $services,
-            partsWithQuantity: $partsWithQuantity,
+            budgetId: isset($row['budget_id']) ? (string)$row['budget_id'] : null,
+            paymentUrl: isset($row['payment_url']) ? (string)$row['payment_url'] : null,
         );
-    }
-
-    /** @return ServiceItem[] */
-    private function loadServices(string $orderId): array
-    {
-        $stmt = $this->pdo->prepare(
-            'SELECT sos.price_charged, sc.id AS sc_id, sc.description, sc.estimated_time_minutes
-             FROM service_order_services sos
-             JOIN service_catalog sc ON sc.id = sos.service_catalog_id
-             WHERE sos.service_order_id = :id'
-        );
-        $stmt->execute([':id' => $orderId]);
-
-        return array_map(fn (array $row) => ServiceItem::create(
-            id: $row['sc_id'],
-            description: $row['description'],
-            basePrice: (float)$row['price_charged'],
-            estimatedTimeMinutes: (int)$row['estimated_time_minutes'],
-        ), $stmt->fetchAll());
-    }
-
-    /** @return array<array{part: Part, quantity: int}> */
-    private function loadParts(string $orderId): array
-    {
-        $stmt = $this->pdo->prepare(
-            'SELECT sop.quantity_used, sop.unit_price_charged,
-                    pi.id AS pi_id, pi.description, pi.stock_quantity
-             FROM service_order_parts sop
-             JOIN parts_inventory pi ON pi.id = sop.parts_inventory_id
-             WHERE sop.service_order_id = :id'
-        );
-        $stmt->execute([':id' => $orderId]);
-
-        return array_map(fn (array $row) => [
-            'part' => Part::create(
-                id: $row['pi_id'],
-                description: $row['description'],
-                price: (float)$row['unit_price_charged'],
-                stockQuantity: (int)$row['stock_quantity'],
-            ),
-            'quantity' => (int)$row['quantity_used'],
-        ], $stmt->fetchAll());
     }
 }

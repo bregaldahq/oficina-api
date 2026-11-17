@@ -5,8 +5,9 @@ banco próprios, coordenados por uma saga orquestrada sobre mensageria. Esta pas
 desenho. O documento normativo desta fase é o [`CONTRATOS.md`](CONTRATOS.md), que **acrescenta**
 ao [`../fase-3/CONTRATOS.md`](../fase-3/CONTRATOS.md): o que ele não altera continua valendo.
 
-> **Estado em 2026-11-10: desenho.** Nada do que está aqui foi implementado ainda. Enquanto um
-> item não estiver implementado, o comportamento em produção é o da Fase 3.
+> **Estado em 2026-11-16: implementado** nos seis repositórios e verificado ponta a ponta sem AWS
+> (`bin/ws e2e`, no repositório principal). Cada item só vale num ambiente depois de entrar em
+> `develop` (hml) ou `main` (prod); até lá, o comportamento lá é o da Fase 3.
 
 | Documento | O que tem |
 |---|---|
@@ -14,6 +15,8 @@ ao [`../fase-3/CONTRATOS.md`](../fase-3/CONTRATOS.md): o que ele não altera con
 | [`adr/`](adr/README.md) | ADRs 011 a 017 |
 | [`diagramas/arquitetura.md`](diagramas/arquitetura.md) | serviços, bancos e comunicação |
 | [`diagramas/saga.md`](diagramas/saga.md) | a saga da OS: caminho feliz, compensações e a máquina de estados |
+| [`newrelic/`](newrelic/README.md) | dashboard e alertas da saga |
+| [`postman/`](postman/) | coleção da saga pelos três serviços, pelo gateway, com o ambiente de homologação |
 
 ## Os três serviços
 

@@ -1,7 +1,8 @@
 name: PR
 
-# Seção 9 dos Contratos: lint + testes + análise estática em todo PR para
-# `develop` ou `main`. Nada é publicado nem implantado aqui.
+# Seção 9 dos Contratos (e §9 do contrato da Fase 4): lint, análise estática, testes com
+# cobertura mínima de 80%, BDD, qualidade (SonarCloud), imagem, manifests e Terraform do infra/.
+# Nada é publicado nem implantado aqui.
 on:
   pull_request:
     branches: [develop, main]
@@ -17,15 +18,19 @@ jobs:
   quality:
     name: Lint, testes e análise estática
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # o Sonar precisa do histórico para atribuir o código novo
 
       - name: Configurar PHP 8.2
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
           extensions: pdo, pdo_sqlite, pdo_mysql, mbstring
-          coverage: none
+          coverage: pcov
           tools: composer:v2
 
       - name: Cache do Composer
@@ -44,8 +49,44 @@ jobs:
       - name: Análise estática (PHPStan)
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=512M
 
-      - name: Testes unitários e de integração
-        run: vendor/bin/phpunit --no-coverage
+      - name: Testes unitários e de integração, com cobertura
+        run: vendor/bin/phpunit --coverage-clover coverage.xml --log-junit junit.xml
+
+      # docs/fase-4/CONTRATOS.md §9: linhas de todo o src/.
+      # A linha da cobertura vai para o resumo do run (evidência por PR), e o relatório, para o artefato.
+      # `shell: bash` liga o pipefail: sem ele o status do passo seria o do tee, sempre 0.
+      - name: Cobertura mínima de 80%
+        shell: bash
+        run: php bin/check-coverage.php coverage.xml 80 | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar o relatório de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura
+          path: coverage.xml
+          if-no-files-found: ignore
+
+      - name: BDD da saga (Behat)
+        run: vendor/bin/behat --no-colors
+
+      # O relatório do PHPUnit traz caminhos absolutos do runner; o Sonar roda em container.
+      - name: Ajustar caminhos do relatório para o Sonar
+        if: env.SONAR_TOKEN != ''
+        run: sed -i "s#${GITHUB_WORKSPACE}/##g" coverage.xml junit.xml
+
+      - name: SonarCloud (quality gate)
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
+
+      - name: Aviso de Sonar não configurado
+        if: env.SONAR_TOKEN == ''
+        run: echo "::warning::SONAR_TOKEN não configurado; a análise do SonarCloud foi pulada."
 
   image:
     name: Build da imagem de produção
@@ -81,3 +122,26 @@ jobs:
         run: |
           kubectl kustomize deploy/overlays/hml  > /dev/null
           kubectl kustomize deploy/overlays/prod > /dev/null
+
+  terraform:
+    name: Terraform fmt e validate (infra/)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      # Sem backend e sem credencial: é o teto de verificação possível no PR.
+      - name: terraform init
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: terraform validate
+        run: terraform validate

@@ -16,7 +16,7 @@ $appDebug  = ($_ENV['APP_DEBUG'] ?? 'false') === 'true';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id, X-Webhook-Token');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 header('X-XSS-Protection: 1; mode=block');
@@ -38,65 +38,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 $jwtProvider    = \App\Infrastructure\Security\JwtProvider::fromEnv();
 $authMiddleware = new \App\Presentation\Middleware\AuthMiddleware($jwtProvider, $context);
 
-$customerRepo      = new \App\Infrastructure\Repository\PdoCustomerRepository();
-$vehicleRepo       = new \App\Infrastructure\Repository\PdoVehicleRepository();
-$partRepo          = new \App\Infrastructure\Repository\PdoPartRepository();
-$serviceItemRepo   = new \App\Infrastructure\Repository\PdoServiceItemRepository();
-$orderRepo         = new \App\Infrastructure\Repository\PdoServiceOrderRepository($uuid);
-$statusHistoryRepo = new \App\Infrastructure\Repository\PdoServiceOrderStatusHistoryRepository();
+$customerRepo = new \App\Infrastructure\Repository\PdoCustomerRepository();
+$vehicleRepo  = new \App\Infrastructure\Repository\PdoVehicleRepository();
 
-$eventDispatcher = new \App\Infrastructure\Event\InMemoryEventDispatcher();
-
-$mailer = new \App\Infrastructure\Notification\SmtpMailer(
-    host: $_ENV['SMTP_HOST']         ?? '',
-    port: (int)($_ENV['SMTP_PORT']   ?? 587),
-    username: $_ENV['SMTP_USERNAME'] ?? '',
-    password: $_ENV['SMTP_PASSWORD'] ?? '',
-    from: $_ENV['MAIL_FROM']         ?? 'no-reply@oficina.local',
-);
-
-$statusNotifier = new \App\Infrastructure\Notification\StatusChangeEmailNotifier(
-    $mailer,
-    $_ENV['MAIL_TO'] ?? '',
-);
-
-// Subscribe the email notifier only when SMTP is configured; otherwise stay silent.
-if (($_ENV['SMTP_HOST'] ?? '') !== '' && ($_ENV['MAIL_TO'] ?? '') !== '') {
-    $eventDispatcher->subscribe(
-        \App\Domain\Event\ServiceOrderStatusChangedEvent::class,
-        static fn (\App\Domain\Event\ServiceOrderStatusChangedEvent $event) => $statusNotifier->handle($event),
-    );
-}
-
-$statusHistorySubscriber = new \App\Infrastructure\Event\Subscriber\StatusHistorySubscriber(
-    $statusHistoryRepo,
-    $uuid,
-    $context,
-    $logger,
-);
-
-$newRelicSubscriber = new \App\Infrastructure\Event\Subscriber\NewRelicSubscriber(
-    $context,
-    $statusHistoryRepo,
-    $appEnv,
-);
-
-$eventDispatcher->subscribe(
-    \App\Domain\Event\ServiceOrderCreatedEvent::class,
-    static fn (\App\Domain\Event\ServiceOrderCreatedEvent $e) => $statusHistorySubscriber->onCreated($e),
-);
-$eventDispatcher->subscribe(
-    \App\Domain\Event\ServiceOrderCreatedEvent::class,
-    static fn (\App\Domain\Event\ServiceOrderCreatedEvent $e) => $newRelicSubscriber->onCreated($e),
-);
-$eventDispatcher->subscribe(
-    \App\Domain\Event\ServiceOrderStatusChangedEvent::class,
-    static fn (\App\Domain\Event\ServiceOrderStatusChangedEvent $e) => $statusHistorySubscriber->onStatusChanged($e),
-);
-$eventDispatcher->subscribe(
-    \App\Domain\Event\ServiceOrderStatusChangedEvent::class,
-    static fn (\App\Domain\Event\ServiceOrderStatusChangedEvent $e) => $newRelicSubscriber->onStatusChanged($e),
-);
+// A saga, os repositórios da OS e o despachante de eventos (histórico, New Relic, e-mail) vêm
+// da mesma montagem que o worker usa (src/Infrastructure/ServiceFactory.php).
+$services  = new \App\Infrastructure\ServiceFactory($_ENV + getenv(), $logger, $context);
+$orderRepo = $services->orders();
 
 $authController = new \App\Presentation\Controller\AuthController(
     new \App\Application\UseCase\Auth\AuthenticateUseCase($jwtProvider)
@@ -108,35 +56,35 @@ $customerController = new \App\Presentation\Controller\CustomerController($custo
 
 $vehicleController = new \App\Presentation\Controller\VehicleController($vehicleRepo, $customerRepo, $uuid);
 
-$partController = new \App\Presentation\Controller\PartController($partRepo, $uuid);
-
-$serviceItemController = new \App\Presentation\Controller\ServiceItemController($serviceItemRepo, $uuid);
-
 $orderController = new \App\Presentation\Controller\ServiceOrderController(
-    new \App\Application\UseCase\ServiceOrder\CreateServiceOrderUseCase(
-        $customerRepo, $vehicleRepo, $orderRepo, $uuid, $eventDispatcher
-    ),
-    new \App\Application\UseCase\ServiceOrder\AddItemsToServiceOrderUseCase(
-        $orderRepo, $serviceItemRepo, $partRepo
-    ),
-    new \App\Application\UseCase\ServiceOrder\GetServiceOrderUseCase($orderRepo),
-    new \App\Application\UseCase\ServiceOrder\ChangeServiceOrderStatusUseCase($orderRepo, $eventDispatcher),
+    $services->createServiceOrder($logger),
+    new \App\Application\UseCase\ServiceOrder\GetServiceOrderUseCase($orderRepo, $services->sagas()),
     new \App\Application\UseCase\ServiceOrder\ListServiceOrdersByCustomerUseCase($orderRepo),
     new \App\Application\UseCase\ServiceOrder\ListServiceOrdersUseCase($orderRepo),
-    new \App\Application\UseCase\ServiceOrder\ReviewBudgetUseCase($orderRepo, $eventDispatcher),
+    $services->cancelServiceOrder($logger),
+    $services->deliverServiceOrder(),
+);
+
+$internalController = new \App\Presentation\Controller\InternalCustomerController(
+    $customerRepo,
+    (string)($_ENV['INTERNAL_TOKEN'] ?? ''),
 );
 
 $router = new \App\Presentation\Router\Router();
 $router->setAuthMiddleware($authMiddleware);
 
-// Authorization matrix — docs/fase-3/CONTRATOS.md §5.
+// Authorization matrix — docs/fase-3/CONTRATOS.md §5, com os adendos de docs/fase-4/CONTRATOS.md §4.
 
 // públicas
 $router->get('/api/health', fn() => $healthController->live(),  requireAuth: false);
 $router->get('/api/ready',  fn() => $healthController->ready(), requireAuth: false);
 $router->post('/api/auth/login', fn() => $authController->login(), requireAuth: false);
-// Guarded by the mandatory X-Webhook-Token header inside the controller, not by the JWT.
-$router->post('/api/service-orders/{id}/approval', fn($p) => $orderController->reviewBudget($p), requireAuth: false);
+// interna: fora do API Gateway, só por dentro da VPC (a Lambda auth-cpf), com X-Internal-Token
+$router->get(
+    '/internal/customers/by-document/{document}',
+    fn ($p) => $internalController->byDocument($p, (string)($_SERVER['HTTP_X_INTERNAL_TOKEN'] ?? '')),
+    requireAuth: false,
+);
 
 // ordens de serviço — a rota /me vem antes de /{id} para não ser capturada por ela
 $router->get('/api/service-orders/me', fn($p, $c) => $orderController->mine($p, $c))
@@ -144,9 +92,10 @@ $router->get('/api/service-orders/me', fn($p, $c) => $orderController->mine($p, 
 $router->get('/api/service-orders/{id}', fn($p, $c) => $orderController->show($p, $c))
     ->requireRole('customer', 'admin');
 $router->get('/api/service-orders', fn() => $orderController->index())->requireRole('admin');
-$router->post('/api/service-orders', fn() => $orderController->store())->requireRole('admin');
-$router->post('/api/service-orders/{id}/items', fn($p) => $orderController->addItems($p))->requireRole('admin');
-$router->patch('/api/service-orders/{id}/status', fn($p) => $orderController->changeStatus($p))->requireRole('admin');
+$router->post('/api/service-orders', fn() => $orderController->store((string)$context->getCorrelationId()))->requireRole('admin');
+// Fase 4: o status é movido pela saga. Daqui só saem a entrega e o cancelamento.
+$router->post('/api/service-orders/{id}/delivery', fn($p) => $orderController->deliver($p))->requireRole('admin');
+$router->post('/api/service-orders/{id}/cancellation', fn($p) => $orderController->cancel($p))->requireRole('admin');
 
 // clientes
 $router->get('/api/customers',         fn() => $customerController->index())->requireRole('admin');
@@ -162,21 +111,7 @@ $router->post('/api/vehicles',         fn() => $vehicleController->store())->req
 $router->put('/api/vehicles/{id}',     fn($p) => $vehicleController->update($p))->requireRole('admin');
 $router->delete('/api/vehicles/{id}',  fn($p) => $vehicleController->destroy($p))->requireRole('admin');
 
-// peças
-$router->get('/api/parts',              fn() => $partController->index())->requireRole('admin');
-$router->get('/api/parts/{id}',         fn($p) => $partController->show($p))->requireRole('admin');
-$router->post('/api/parts',             fn() => $partController->store())->requireRole('admin');
-$router->put('/api/parts/{id}',         fn($p) => $partController->update($p))->requireRole('admin');
-$router->patch('/api/parts/{id}/stock', fn($p) => $partController->updateStock($p))->requireRole('admin');
-$router->delete('/api/parts/{id}',      fn($p) => $partController->destroy($p))->requireRole('admin');
-
-// catálogo de serviços
-$router->get('/api/service-items/metrics', fn() => $serviceItemController->metrics())->requireRole('admin');
-$router->get('/api/service-items',         fn() => $serviceItemController->index())->requireRole('admin');
-$router->get('/api/service-items/{id}',    fn($p) => $serviceItemController->show($p))->requireRole('admin');
-$router->post('/api/service-items',        fn() => $serviceItemController->store())->requireRole('admin');
-$router->put('/api/service-items/{id}',    fn($p) => $serviceItemController->update($p))->requireRole('admin');
-$router->delete('/api/service-items/{id}', fn($p) => $serviceItemController->destroy($p))->requireRole('admin');
+// catálogo e estoque saíram para o serviço de Faturamento (/api/billing), Fase 4
 
 $method = (string)($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $uri    = (string)($_SERVER['REQUEST_URI'] ?? '/');
@@ -185,9 +120,16 @@ $uri    = (string)($_SERVER['REQUEST_URI'] ?? '/');
  * One structured line per request (CONTRATOS.md §7), emitted even when the request dies on
  * an exit() inside a middleware — hence the shutdown function.
  */
+// O CPF da consulta interna vai na URL: não entra no log.
+$logPath = static fn (string $uri): string => (string)preg_replace(
+    '#^(/internal/customers/by-document/)[^/]+#',
+    '$1***',
+    (string)(parse_url($uri, PHP_URL_PATH) ?? $uri),
+);
+
 $requestLogged = false;
 $logRequest    = static function (string $level = 'info') use (
-    &$requestLogged, $logger, $context, $method, $uri, $startedAt
+    &$requestLogged, $logger, $context, $method, $uri, $startedAt, $logPath
 ): void {
     if ($requestLogged) {
         return;
@@ -197,7 +139,7 @@ $logRequest    = static function (string $level = 'info') use (
     $logger->log($level, 'request.completed', [
         'correlation_id' => $context->getCorrelationId(),
         'method'         => $method,
-        'path'           => (string)(parse_url($uri, PHP_URL_PATH) ?? $uri),
+        'path'           => $logPath($uri),
         'status'         => http_response_code() ?: 200,
         'duration_ms'    => round((microtime(true) - $startedAt) * 1000, 1),
         'customer_id'    => $context->getActor(),
@@ -209,6 +151,9 @@ register_shutdown_function(static fn () => $logRequest());
 
 try {
     $router->dispatch($method, $uri);
+} catch (\App\Presentation\Request\RequestValidationException $e) {
+    http_response_code($e->status);
+    echo json_encode(['error' => $e->getMessage()]);
 } catch (\App\Domain\Exception\DomainException $e) {
     http_response_code(422);
     echo json_encode(['error' => $e->getMessage()]);
