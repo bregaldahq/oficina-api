@@ -7,8 +7,11 @@ name: Deploy
 # Autenticação AWS exclusivamente por OIDC (nenhuma access key estática).
 # Todo o acoplamento com os outros repositórios é lido do SSM Parameter Store.
 on:
+  # Homologação sobe a cada merge em `develop`. Produção não sobe sozinha: um merge em `main` é
+  # decisão de código, e aplicar em produção é decisão de operação (o mesmo dos repos de infra
+  # e do gateway). Para produção, dispare este workflow com a ref `main`.
   push:
-    branches: [develop, main]
+    branches: [develop]
   workflow_dispatch:
     inputs:
       migrations_ref:

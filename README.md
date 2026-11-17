@@ -591,7 +591,7 @@ Pontos de integração que valem a leitura antes do primeiro deploy:
 | Workflow | Gatilho | O que faz |
 |---|---|---|
 | [`pr.yml`](.github/workflows/pr.yml) | PR para `develop` ou `main` | PHP-CS-Fixer, PHPUnit e PHPStan nível 8 |
-| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; push em `main` → `producao` | OIDC → `infra/` → build → ECR → configuração → Job de migration → Deployments (`kubectl apply -k`) → smoke test → marca o deployment no New Relic |
+| [`deploy.yml`](.github/workflows/deploy.yml) | push em `develop` → `homologacao`; `producao` só por disparo manual com a ref `main` | OIDC → `infra/` → build → ECR → configuração → Job de migration → Deployments (`kubectl apply -k`) → smoke test → marca o deployment no New Relic |
 
 Autenticação na AWS por **OIDC** (`aws-actions/configure-aws-credentials@v4` com
 `role-to-assume` e `permissions: id-token: write`). **Não existe access key estática** em nenhum
